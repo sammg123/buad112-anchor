@@ -1,5 +1,39 @@
 # Anchor
 
+## Phone prototype (BUAD 112 demo)
+
+Anchor punishes your **phone**. Inside a 50 m zone around your anchor, opening a distracting app (via iOS Shortcuts) bounces you to Anchor's gate page and makes you wait, then greys and dims the phone, shows tuition burned, demands a typed confession, and drains a deposit.
+
+**Setup (recommended: ngrok static domain)**
+
+1. `brew install ngrok`, make a free account at ngrok.com, claim your free static domain, then `ngrok config add-authtoken YOUR_TOKEN`.
+2. `npm install && NGROK_DOMAIN=your-name.ngrok-free.app npm start`. The URL never changes, so the Home Screen app and the Shortcuts never need updating. The key also survives restarts.
+3. Open http://localhost:5112 on the Mac and scan the QR code with your iPhone camera. Add the page to your Home Screen.
+4. Set up the Shortcuts: [docs/shortcuts.md](docs/shortcuts.md). Without them, the phone page has a Presenter panel with "Simulate opening Instagram" and "Simulate opening Settings".
+
+**No account? Cloudflare fallback:** `brew install cloudflared` (or download the macOS binary from https://github.com/cloudflare/cloudflared/releases to `~/.local/bin/cloudflared`), then `npm install && npm start` without `NGROK_DOMAIN`. The URL changes each run, so update "Anchor Config" before every demo.
+
+**Phone ladder** (one step per 15 s on the phone). Effects stay on until you leave the zone.
+
+| On phone | Step | What happens | Gate wait | Pass after |
+|---|---|---|---|---|
+| 0:00 | Gate | Opening an app bounces you to Anchor | 10 s | 90 s |
+| 0:15 | Grayscale | The phone goes grey | 12 s | 80 s |
+| 0:30 | Loud | Silent mode off, volume 100% | 15 s | 70 s |
+| 0:45 | Dim | Brightness 15% | 20 s | 60 s |
+| 1:00 | Receipt | Tuition burned, live on the gate | 25 s | 50 s |
+| 1:15 | Huge text | Text size maxed | 30 s | 40 s |
+| 1:30 | Shame wallpaper | Wallpaper shows what you burned | 40 s | 30 s |
+| 1:45 | Flashlight | Blinks on every app open | 45 s | 25 s |
+| 2:00 | Confession | Type the phrase to pass the gate | 50 s | 20 s |
+| 2:15 | Deposit | Deposit drains (only if you put one down) | 60 s | 15 s |
+
+Opening Settings or Shortcuts inside the zone bounces you to a locked screen. The Mac effects (sound, speech, overlay) are opt-in: `ANCHOR_MAC=1 npm start`.
+
+---
+
+## Mac mode (original MVP)
+
 A study timer you can't quietly quit. BUAD112 MVP.
 
 You drop an anchor where you study. While you're within 50 m of it, **Stop is locked**.

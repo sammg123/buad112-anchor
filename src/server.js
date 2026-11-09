@@ -2,11 +2,22 @@
  * Localhost HTTP server: static page, JSON API, and a server-sent-events stream.
  * Only answers requests addressed to this machine's loopback name, and only accepts
  * same-origin JSON posts, so another website cannot drive the session.
+ * Phone mode: with a token set, the page is also served through a tunnel, and any request carrying
+ * the token (the `x-anchor-key` header or `?k=`) may use the API: the phone page and its iOS Shortcuts.
  */
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseStart, parseLocation, parsePhone, parseDemo, parseConfess } from './validate.js';
+import {
+  parseStart,
+  parseLocation,
+  parsePhone,
+  parseDemo,
+  parseConfess,
+  parsePhoneEvent,
+  parseGatePass,
+} from './validate.js';
 import { createLogger } from './log.js';
 import { LADDER, LADDERS } from './ladder.js';
 import { DEPOSIT_MAX } from './deposit.js';
@@ -37,6 +48,7 @@ const CONTENT_TYPES = Object.freeze({
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json',
 });
 
 const SECURITY_HEADERS = Object.freeze({
@@ -111,6 +123,10 @@ function postRoutes(app) {
     '/api/location': validated(parseLocation, (fix) => app.location(fix)),
     '/api/demo': validated(parseDemo, (demo) => app.demo(demo)),
     '/api/confess': validated(parseConfess, (text) => app.confess(text)),
+    '/api/phone/open': validated(parsePhoneEvent, (event) => app.phoneOpened(event)),
+    '/api/phone/close': validated(parsePhoneEvent, (event) => app.phoneClosed(event)),
+    '/api/phone/guard': validated(parsePhoneEvent, (event) => app.phoneGuarded(event)),
+    '/api/gate': validated(parseGatePass, (text) => app.passGate(text)),
     '/api/stop': () => app.stop(),
     '/api/reset': () => app.reset(),
   });
@@ -149,26 +165,57 @@ function serveStatic(pathname, res, publicDir) {
   return undefined;
 }
 
+/** Constant-time token check. */
+function hasKey(req, url, token) {
+  if (!token) return false;
+  const given = String(req.headers['x-anchor-key'] ?? url.searchParams.get('k') ?? '');
+  const a = Buffer.from(given);
+  const b = Buffer.from(token);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 /**
- * @param {{ app: ReturnType<typeof import('./app.js').createApp>, publicDir: string, log?: ReturnType<typeof createLogger> }} deps
+ * @param {{
+ *   app: ReturnType<typeof import('./app.js').createApp>,
+ *   publicDir: string,
+ *   log?: ReturnType<typeof createLogger>,
+ *   token?: string | null,
+ *   connect?: () => { url: string | null, qrSvg: string | null },
+ * }} deps
  * @returns {http.Server}
  */
-export function createHttpServer({ app, publicDir, log = createLogger() }) {
+export function createHttpServer({ app, publicDir, log = createLogger(), token = null, connect = () => ({ url: null, qrSvg: null }) }) {
   const root = path.resolve(publicDir);
   const routes = postRoutes(app);
   const streams = new Set();
 
   async function handle(req, res, port) {
-    if (!isLoopbackHost(req.headers.host, port)) return failure(res, 403, 'Anchor only answers on localhost.');
-    const { pathname } = new URL(req.url ?? '/', `http://localhost:${port}`);
+    const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+    const { pathname } = url;
+    const local = isLoopbackHost(req.headers.host, port);
+    const keyed = hasKey(req, url, token);
+    // Through the tunnel the page itself is public (it holds nothing); everything live needs the token.
+    const isPage = req.method === 'GET' && !pathname.startsWith('/api/') && pathname !== '/events';
+    if (!local && !keyed && !(token && isPage)) return failure(res, 403, 'Anchor only answers on localhost.');
 
+    if (req.method === 'GET' && pathname === '/api/connect') {
+      return local ? success(res, connect()) : failure(res, 403, 'Only the Mac can show the pairing code.');
+    }
+    if (req.method === 'GET' && pathname === '/api/phone/now') return success(res, app.phoneNow());
+    if (req.method === 'GET' && pathname === '/api/wallpaper.png') {
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png' });
+      return res.end(app.wallpaper());
+    }
     if (req.method === 'GET' && pathname === '/api/state') return success(res, app.state());
     if (req.method === 'GET' && pathname === '/api/rules') return success(res, RULES);
     if (req.method === 'GET' && pathname === '/events') return serveEvents(req, res, app, streams);
     if (req.method === 'GET') return serveStatic(pathname, res, root);
     if (req.method !== 'POST') return failure(res, 405, 'Method not allowed.');
 
-    if (!allowedOrigins(port).includes(req.headers.origin)) return failure(res, 403, 'Cross-site requests are not allowed.');
+    // A keyed request (phone page, Shortcuts) proved itself; Shortcuts send no Origin at all.
+    if (!keyed && !allowedOrigins(port).includes(req.headers.origin)) {
+      return failure(res, 403, 'Cross-site requests are not allowed.');
+    }
     if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) {
       return failure(res, 415, 'Send JSON.');
     }

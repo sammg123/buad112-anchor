@@ -1378,3 +1378,40 @@ body[data-fx-blur='on'] .phone-control {
     flex-direction: column;
   }
 }
+
+/* ---------- Pairing card ---------- */
+
+.pair {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  max-width: 340px;
+  padding: 10px 12px;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-page);
+}
+
+.pair__qr svg {
+  display: block;
+  width: 110px;
+  height: 110px;
+}
+
+.pair__caption {
+  margin: 0 0 6px;
+  font-weight: 700;
+  font-size: var(--text-sm);
+}
+
+.pair__mono {
+  margin: 0;
+  font: 500 0.7rem / 1.3 ui-monospace, 'SF Mono', Menlo, monospace;
+  color: var(--pencil);
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Anchor">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#a9c7ec">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <title>Anchor</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="phone.css">
+  <script src="phone.js" type="module"></script>
+</head>
+<body data-view="loading">
+  <p class="offline" id="offline" role="status" hidden>Lost touch with Anchor. Reconnecting...</p>
+
+  <!-- SETUP -->
+  <main class="screen" id="setup" hidden>
+    <header class="masthead">
+      <h1 class="masthead__title">Anchor</h1>
+      <p class="masthead__sub">Study session book. Your phone gets graded.</p>
+    </header>
+    <form class="sheet" id="start-form" novalidate>
+      <label class="field"><span class="field__label">Course</span>
+        <input class="field__input" name="courseName" maxlength="40" autocomplete="off" value="BUAD 112"></label>
+      <label class="field"><span class="field__label">Minutes</span>
+        <input class="field__input" name="studyMinutes" type="number" inputmode="numeric" min="1" max="240" step="1" value="25"></label>
+      <label class="field"><span class="field__label">College tuition / yr (optional)</span>
+        <input class="field__input" name="tuitionPerYear" type="text" inputmode="numeric" autocomplete="off" placeholder="70,000"></label>
+      <label class="field"><span class="field__label">Deposit (optional, play money)</span>
+        <input class="field__input" name="deposit" type="text" inputmode="decimal" autocomplete="off" placeholder="0"></label>
+      <p class="hint" id="a2hs" hidden>Tip: tap Share, then Add to Home Screen, so Anchor opens like an app.</p>
+      <button class="btn btn--ink" type="submit" id="start-btn">Drop anchor &amp; start</button>
+      <p class="error" id="start-error" role="alert"></p>
+    </form>
+  </main>
+
+  <!-- SESSION -->
+  <main class="screen" id="session" hidden>
+    <header class="masthead masthead--small">
+      <p class="masthead__course" id="course-name">BUAD 112</p>
+      <p class="chip" id="deposit-chip" hidden>Deposit <strong id="deposit-left">$0</strong></p>
+    </header>
+    <section class="sheet">
+      <p class="label">Left to study</p>
+      <p class="big" id="study-time">25:00</p>
+      <p class="pen-line">On your phone <strong id="phone-time">0:00</strong> <span id="pickups"></span></p>
+      <p class="loc" id="loc">Finding you...</p>
+      <h2 class="label">Phone rubric</h2>
+      <ol class="rubric" id="rubric"></ol>
+      <button class="btn btn--outline" type="button" id="stop-btn" disabled>Stop studying</button>
+      <p class="hint" id="stop-why"></p>
+      <button class="btn btn--pen" type="button" id="enforcer-btn">Start the Enforcer</button>
+      <p class="hint">Runs the Anchor Enforcer shortcut, which re-applies the punishments every 15 s while you're at your anchor.</p>
+      <p class="error" id="session-error" role="alert"></p>
+    </section>
+
+    <details class="presenter">
+      <summary>Presenter</summary>
+      <div class="presenter__body">
+        <label class="field"><span class="field__label">Demo speed <output id="speed-out">1x</output></span>
+          <input type="range" id="speed-range" min="1" max="10" step="0.5" value="1"></label>
+        <label class="field"><span class="field__label">Simulated distance <output id="sim-out">real GPS</output></span>
+          <input type="range" id="sim-range" min="0" max="200" step="1" value="0"></label>
+        <button class="btn btn--outline btn--small" type="button" id="sim-reset">Use real GPS</button>
+        <button class="btn btn--pen" type="button" id="open-btn">Simulate opening Instagram</button>
+        <button class="btn btn--pen" type="button" id="guard-btn">Simulate opening Settings</button>
+        <button class="btn btn--outline btn--small" type="button" id="close-btn">I closed the app</button>
+      </div>
+    </details>
+  </main>
+
+  <!-- DONE -->
+  <main class="screen" id="done" hidden>
+    <header class="masthead"><h1 class="masthead__title">Anchor</h1><p class="masthead__sub">Session handed back.</p></header>
+    <section class="sheet">
+      <div class="grade"><p class="grade__label">Grade</p><p class="grade__mark" id="grade">A</p><p><span id="score">100</span>% focused</p></div>
+      <dl class="filled" id="filled"></dl>
+      <button class="btn btn--ink" type="button" id="again-btn">New session</button>
+      <p class="error" id="done-error" role="alert"></p>
+    </section>
+  </main>
+
+  <!-- GATE -->
+  <main class="gate" id="gate" hidden>
+    <div class="gate__inner">
+      <p class="gate__kicker">You're at your anchor.</p>
+      <p class="gate__count" id="gate-count">10</p>
+      <p class="gate__line" id="gate-line">Wait. Then decide if you really need this app.</p>
+      <p class="gate__cost" id="gate-cost" hidden>Tuition burned: <strong id="gate-cost-amt">$0.00</strong></p>
+      <p class="gate__fx" id="gate-fx" hidden></p>
+      <form class="gate__confess" id="gate-form" hidden>
+        <p class="gate__phrase" id="gate-phrase"></p>
+        <input class="gate__input" id="gate-input" autocomplete="off" autocapitalize="off" aria-label="Type the sentence">
+      </form>
+      <button class="btn btn--paper" type="button" id="gate-btn" disabled>Continue</button>
+      <p class="gate__ok" id="gate-ok" hidden></p>
+      <p class="error error--gate" id="gate-error" role="alert"></p>
+      <button class="gate__back" type="button" id="gate-back">Back to Anchor</button>
+    </div>
+  </main>
+
+  <!-- LOCKED -->
+  <main class="gate" id="locked" hidden>
+    <div class="gate__inner">
+      <p class="gate__kicker">Settings are locked until you leave your anchor.</p>
+      <p class="gate__count" id="locked-dist">50 m</p>
+      <p class="gate__line">to go.</p>
+      <button class="gate__back" type="button" id="locked-back">Back to Anchor</button>
+    </div>
+  </main>
+
+  <div class="dim" id="dim" aria-hidden="true"></div>
+</body>
+</html>

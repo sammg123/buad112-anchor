@@ -2,11 +2,17 @@
  * Starts Anchor: the localhost server, the 4x-a-second session loop, and the screen overlay.
  * Usage: npm start
  *   PORT=5112          port (default 5112)
+ *   ANCHOR_MAC=1       also punish the Mac (sound, speech, overlay); off by default, the phone is the target
  *   ANCHOR_SILENT=1    skip sound, speech, and volume changes (for testing)
  *   ANCHOR_OVERLAY=0   skip the Mac-wide overlay; the page draws effects inside the tab instead
+ *   ANCHOR_TOKEN=xyz   the phone's key (default: made once and kept in data/token.txt)
+ *   ANCHOR_TUNNEL=0    don't start a tunnel
+ *   NGROK_DOMAIN=x.ngrok-free.app  use your free ngrok static domain: the phone link never changes
+ *                      (otherwise a Cloudflare quick tunnel, whose address changes every start)
  *   ANCHOR_DATA=dir    where the session file is saved (default ./data)
  */
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
@@ -16,6 +22,7 @@ import { createOverlay } from './overlay.js';
 import { createStore } from './store.js';
 import { createLogger } from './log.js';
 import { sirenWav, tickWav } from './audio.js';
+import { startTunnel } from './tunnel.js';
 
 /** 10 loop passes a second, so the fastest ticking (every ~300 ms) stays distinct. */
 const LOOP_MS = 100;
@@ -40,6 +47,21 @@ function writeSounds() {
   return { tickPath, sirenPath };
 }
 
+/** The phone's key survives restarts, so the Home Screen app and the Shortcuts keep working. */
+function loadToken() {
+  const file = path.join(dataDir, 'token.txt');
+  try {
+    const saved = fs.readFileSync(file, 'utf8').trim();
+    if (/^[\w-]{12,}$/.test(saved)) return saved;
+  } catch {
+    // first start
+  }
+  const token = crypto.randomBytes(9).toString('base64url');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(file, token, { mode: 0o600 });
+  return token;
+}
+
 function main() {
   if (process.platform !== 'darwin') log.error('Anchor drives macOS features; on this OS only the page will work.');
   const port = parsePort(process.env.PORT);
@@ -47,7 +69,10 @@ function main() {
   const store = createStore(path.join(dataDir, 'session.json'), log);
   const volumeFile = path.join(dataDir, 'volume-before-anchor.json');
   restorePendingVolume({ volumeFile, log });
-  const effects = createMacEffects({ ...writeSounds(), volumeFile, silent, log });
+  const mac = process.env.ANCHOR_MAC === '1';
+  const effects = mac
+    ? createMacEffects({ ...writeSounds(), volumeFile, silent, log })
+    : { run() {}, stopAll() {} };
 
   let app = null;
   const overlay = createOverlay({
@@ -56,7 +81,7 @@ function main() {
     onEvent: (event) => app?.handleOverlayEvent(event),
     log,
   });
-  const useOverlay = process.env.ANCHOR_OVERLAY !== '0';
+  const useOverlay = mac && process.env.ANCHOR_OVERLAY !== '0';
   app = createApp({
     effects,
     overlay: useOverlay ? overlay : null,
@@ -66,7 +91,15 @@ function main() {
   });
   if (useOverlay) overlay.start();
 
-  const server = createHttpServer({ app, publicDir: path.join(root, 'public'), log });
+  const token = process.env.ANCHOR_TOKEN || loadToken();
+  const tunnel = process.env.ANCHOR_TUNNEL === '0' ? null : startTunnel({ port, token, log });
+  const server = createHttpServer({
+    app,
+    publicDir: path.join(root, 'public'),
+    log,
+    token,
+    connect: () => tunnel?.connect() ?? { url: null, qrSvg: null, error: 'Tunnel is off (ANCHOR_TUNNEL=0).' },
+  });
   const loop = setInterval(() => app.step(), LOOP_MS);
 
   server.on('error', (error) => {
@@ -80,6 +113,7 @@ function main() {
     if (closed) return;
     closed = true;
     clearInterval(loop);
+    tunnel?.stop();
     app.shutdown();
     server.close();
     process.exit(code);

@@ -20,7 +20,8 @@ import { normalizePhrase } from './phrase.js';
 
 /** The session's ladder: library mode (quiet) has no sound steps and 20 s steps. */
 const depositOf = (state) => state.deposit ?? 0;
-const ladderOf = (state) => ladderFor(state.config?.quiet === true, depositOf(state) > 0);
+const modeOf = (state) => (state.config?.mode === 'phone' ? 'phone' : 'mac');
+const ladderOf = (state) => ladderFor(state.config?.quiet === true, depositOf(state) > 0, modeOf(state));
 
 /** The punishment clock stops at the top step; the timer you see keeps counting. */
 const pressureCap = (ladder) => (ladder.maxLevel + 1) * ladder.levelMs - 1;
@@ -172,7 +173,8 @@ export function setPhone(state, onPhone, now) {
     onPhone: false,
     pickupCounted: false,
     // The confession pops up once; getting off the phone while it's up ends it for the session too.
-    confessionDone: current.confessionDone || confessionUp(current),
+    // On the phone the gate page holds it instead, and opening that page closes the app you were in.
+    confessionDone: current.confessionDone || (modeOf(current) === 'mac' && confessionUp(current)),
   };
 }
 
@@ -228,6 +230,20 @@ export function setDemoSpeed(state, speed) {
  */
 export function confess(state, text, now) {
   if (state.status !== 'running' || !state.onPhone || isAway(state.location)) return state;
+  if (normalizePhrase(text) !== normalizePhrase(CONFESSION_PHRASE)) return state;
+  return { ...state, confessionDone: true };
+}
+
+/**
+ * Phone mode: the confession is typed on the gate page, which is open after the app was closed,
+ * so it doesn't need you on the phone. Only counts once its step is reached at the anchor.
+ * @param {ReturnType<typeof createIdle>} state
+ * @param {string} text
+ */
+export function confessAtGate(state, text) {
+  if (state.status !== 'running' || state.confessionDone || isAway(state.location)) return state;
+  const ladder = ladderOf(state);
+  if (!ladder.reached(ladder.levelFor(state.pressureMs), 'confess')) return state;
   if (normalizePhrase(text) !== normalizePhrase(CONFESSION_PHRASE)) return state;
   return { ...state, confessionDone: true };
 }
@@ -358,6 +374,7 @@ export function snapshot(state, now) {
     config: state.config,
     demoSpeed: state.demoSpeed,
     quiet: ladder.quiet,
+    mode: modeOf(state),
     study: {
       elapsedMs: state.studyElapsedMs,
       targetMs: state.studyTargetMs,
@@ -392,6 +409,8 @@ export function snapshot(state, now) {
     snitch: running && phoneCounts ? snitchView(state.snitch, now) : null,
     confession: {
       required: confessionUp(state),
+      // Phone mode: the step is reached and not typed yet, whether or not you're in an app right now.
+      owed: running && !away && !state.confessionDone && ladder.reached(level, 'confess'),
       phrase: CONFESSION_PHRASE,
     },
     summary: state.status === 'done' ? summarize(state) : null,

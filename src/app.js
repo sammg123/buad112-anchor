@@ -11,11 +11,13 @@ import {
   setSimulatedDistance,
   setDemoSpeed,
   confess,
+  confessAtGate,
   stopSession,
   resetSession,
   snapshot,
 } from './engine.js';
 import { createPlan, planEffects, overlayFrame } from './effects.js';
+import { phoneEffects, guardEffects, shameWallpaper } from './phone.js';
 import { RADIUS_M } from './config.js';
 import { createLogger } from './log.js';
 
@@ -35,6 +37,8 @@ const conflict = (error) => ({ ok: false, status: 409, error });
 export function createApp({ now = Date.now, effects, overlay = null, persist = null, initialState, log = createLogger() }) {
   let state = initialState ?? createIdle();
   let plan = createPlan();
+  // Phone mode: after the gate, app opens don't bounce until this time. Not saved; a restart means a gate.
+  let passUntil = null;
   const listeners = new Set();
 
   /** What the page gets: the snapshot plus the overlay frame, which the page draws itself if the overlay is down. */
@@ -42,6 +46,7 @@ export function createApp({ now = Date.now, effects, overlay = null, persist = n
     ...snap,
     overlayAvailable: overlay ? overlay.isAvailable() : false,
     fx: overlayFrame(snap, now()),
+    phoneFx: phoneEffects(snap, { passUntil }, now()),
   });
 
   function runAction(action) {
@@ -91,6 +96,7 @@ export function createApp({ now = Date.now, effects, overlay = null, persist = n
 
     start(config) {
       if (state.status === 'running') return conflict('A study session is already running.');
+      passUntil = null;
       return apply((s, t) => startSession(s.status === 'done' ? resetSession(s) : s, config, t));
     },
 
@@ -124,8 +130,52 @@ export function createApp({ now = Date.now, effects, overlay = null, persist = n
       return apply((s, at) => stopSession(s, at));
     },
 
+    /** iOS Shortcut: an app opened. Updates location if sent, starts the phone clock, says what to do. */
+    phoneOpened({ fix }) {
+      if (fix) this.location(fix);
+      if (state.status === 'running') this.phone(true);
+      return ok(this.phoneNow());
+    },
+
+    /** iOS Shortcut: the app closed. Stops the phone clock and lifts the phone-wide effects. */
+    phoneClosed({ fix }) {
+      if (fix) this.location(fix);
+      if (state.status === 'running') this.phone(false);
+      return ok(this.phoneNow());
+    },
+
+    /** iOS Shortcut: Settings or Shortcuts opened. Not phone time; inside the zone it's always locked. */
+    phoneGuarded({ fix }) {
+      if (fix) this.location(fix);
+      return ok(guardEffects(this.phoneNow()));
+    },
+
+    /** The shame wallpaper PNG for right now. */
+    wallpaper() {
+      const t = now();
+      return shameWallpaper(snapshot(tick(state, t), t));
+    },
+
+    /** The gate page's Continue button: confession if it's owed, then a pass that grows shorter every step. */
+    passGate(text) {
+      const notRunning = requireRunning();
+      if (notRunning) return notRunning;
+      const t = now();
+      state = confessAtGate(tick(state, t), text);
+      const fx = this.phoneNow();
+      if (fx.confess) return conflict('Type the sentence exactly to get past the gate.');
+      passUntil = t + (fx.passSeconds ?? 0) * 1000;
+      return ok(this.phoneNow());
+    },
+
+    phoneNow() {
+      const t = now();
+      return phoneEffects(snapshot(state, t), { passUntil }, t);
+    },
+
     reset() {
       if (state.status === 'running') return conflict('A running session cannot be reset. Finish it or walk away.');
+      passUntil = null;
       return apply((s) => resetSession(s));
     },
 

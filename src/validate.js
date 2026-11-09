@@ -40,6 +40,8 @@ export function parseStart(body) {
   const name = cleaned || DEFAULTS.courseName;
   const quiet = body.quiet ?? false;
   if (typeof quiet !== 'boolean') return fail('Library mode must be on or off.');
+  const mode = body.mode ?? 'mac';
+  if (mode !== 'mac' && mode !== 'phone') return fail('Mode must be "mac" or "phone".');
   // Leaving the deposit empty means no money down and no deposit step.
   const deposit = body.deposit ?? 0;
   if (!isValidDeposit(deposit)) {
@@ -52,7 +54,28 @@ export function parseStart(body) {
     courseName: name,
     quiet,
     deposit,
+    mode,
   });
+}
+
+/**
+ * What an iOS Shortcut sends when an app opens or closes: the app's name and, optionally, where you are.
+ * @param {unknown} body
+ */
+export function parsePhoneEvent(body) {
+  if (!isPlainObject(body)) return fail('Send the app event as a JSON object.');
+  const app = typeof body.app === 'string' ? body.app.replace(/\p{C}/gu, '').trim().slice(0, 40) : '';
+  if (body.lat === undefined && body.lng === undefined) return ok({ app, fix: null });
+  const fix = parseLocation({ lat: body.lat, lng: body.lng, accuracy: body.accuracy ?? 30 });
+  return fix.ok ? ok({ app, fix: fix.value }) : fix;
+}
+
+/** @param {unknown} body */
+export function parseGatePass(body) {
+  if (!isPlainObject(body)) return fail('Send the gate pass as a JSON object.');
+  if (body.text !== undefined && typeof body.text !== 'string') return fail('Type the sentence to confess.');
+  if ((body.text ?? '').length > LIMITS.maxConfession) return fail('That is longer than the sentence.');
+  return ok(body.text ?? '');
 }
 
 /** @param {unknown} body */

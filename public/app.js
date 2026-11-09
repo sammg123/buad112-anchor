@@ -543,6 +543,30 @@ function connect() {
   };
 }
 
+/* ---------- pairing card (phone mode) ---------- */
+
+async function loadPairing() {
+  try {
+    const res = await fetch('/api/connect');
+    const data = (await res.json()).data;
+    if (data?.error) {
+      setText('pair-caption', data.error);
+      show('pair', true);
+    }
+    if (data?.url) {
+      $('pair-qr').innerHTML = data.qrSvg; // trusted server output
+      setText('pair-caption', 'Scan with your iPhone camera');
+      setText('pair-base', data.base);
+      setText('pair-key', data.token);
+      show('pair', true);
+      return;
+    }
+  } catch {
+    /* server not ready yet; retry below */
+  }
+  setTimeout(loadPairing, 3000);
+}
+
 async function init() {
   try {
     const res = await fetch('/api/rules');
@@ -560,6 +584,7 @@ async function init() {
   renderAnchorStatus();
   startLocation();
   connect();
+  loadPairing();
 }
 
 init();

@@ -7,7 +7,7 @@ describe('parseStart', () => {
     const r = parseStart({ studyMinutes: 25, dollarsPerMinute: 2.5, courseName: '  BUAD 112 ' });
     assert.deepEqual(r, {
       ok: true,
-      value: { studyMinutes: 25, dollarsPerMinute: 2.5, tuitionPerYear: null, courseName: 'BUAD 112', quiet: false, deposit: 0 },
+      value: { studyMinutes: 25, dollarsPerMinute: 2.5, tuitionPerYear: null, courseName: 'BUAD 112', quiet: false, deposit: 0, mode: 'mac' },
     });
   });
 
