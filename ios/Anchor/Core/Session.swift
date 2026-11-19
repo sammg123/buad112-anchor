@@ -2,9 +2,9 @@ import Foundation
 
 /// What the student chose on the cover before starting.
 struct SessionConfig: Codable, Equatable, Sendable {
-    let courseName: String
     let studyMinutes: Int
-    let tuitionPerYear: Double
+    /// Stop stays locked inside this circle (25 m at least), plus GPS slack.
+    let radiusMeters: Double
     /// Run the "Anchor Gray" shortcut at the start and "Anchor Color" at the end.
     let grayscale: Bool
 }
@@ -16,9 +16,6 @@ struct SessionConfig: Codable, Equatable, Sendable {
 /// - phone: at the anchor and on the phone (it never resets during a session),
 /// - away: past the Stop unlock distance; the phone is free there and nothing else counts.
 struct Session: Codable, Equatable, Sendable {
-    /// Class minutes in a school year: 15 h a week x 15 weeks x 2 semesters.
-    static let classMinutesPerYear = 15.0 * 15 * 2 * 60
-
     let config: SessionConfig
     let anchor: GeoPoint
     let anchorAccuracy: Double
@@ -28,6 +25,7 @@ struct Session: Codable, Equatable, Sendable {
     let phoneSeconds: Double
     /// Phone time in the current pickup only.
     let stintSeconds: Double
+    let longestStintSeconds: Double
     let awaySeconds: Double
     let onPhone: Bool
     let away: Bool
@@ -36,7 +34,7 @@ struct Session: Codable, Equatable, Sendable {
 
     static func start(config: SessionConfig, anchor: GeoPoint, anchorAccuracy: Double, at now: Date) -> Session {
         Session(config: config, anchor: anchor, anchorAccuracy: anchorAccuracy, startedAt: now, lastTick: now,
-                studiedSeconds: 0, phoneSeconds: 0, stintSeconds: 0, awaySeconds: 0, onPhone: false, away: false, pickups: 0,
+                studiedSeconds: 0, phoneSeconds: 0, stintSeconds: 0, longestStintSeconds: 0, awaySeconds: 0, onPhone: false, away: false, pickups: 0,
                 finishedAt: nil)
     }
 
@@ -46,7 +44,6 @@ struct Session: Codable, Equatable, Sendable {
     /// The phone clock (and the buzzing) only runs at the anchor.
     var isOnPhoneCounting: Bool { onPhone && !away && !isComplete }
     var isStudying: Bool { !onPhone && !away && !isComplete }
-    var costDollars: Double { phoneSeconds / 60 * config.tuitionPerYear / Self.classMinutesPerYear }
 
     /// Move the clocks up to `now`. A finished session never changes.
     func advanced(to now: Date) -> Session {
@@ -63,6 +60,7 @@ struct Session: Codable, Equatable, Sendable {
             studiedSeconds: studiedSeconds + (isStudying ? dt : 0),
             phoneSeconds: phoneSeconds + (isOnPhoneCounting ? dt : 0),
             stintSeconds: stintSeconds + (isOnPhoneCounting ? dt : 0),
+            longestStintSeconds: max(longestStintSeconds, stintSeconds + (isOnPhoneCounting ? dt : 0)),
             awaySeconds: awaySeconds + (away ? dt : 0)
         )
     }
@@ -89,6 +87,8 @@ struct Session: Codable, Equatable, Sendable {
             studiedSeconds: current.studiedSeconds + refund,
             phoneSeconds: current.phoneSeconds - refund,
             stintSeconds: 0,
+            longestStintSeconds: current.longestStintSeconds == current.stintSeconds
+                ? current.stintSeconds - refund : current.longestStintSeconds,
             onPhone: false,
             pickups: current.pickups - (wasLag ? 1 : 0)
         )
@@ -112,6 +112,7 @@ struct Session: Codable, Equatable, Sendable {
         studiedSeconds: Double? = nil,
         phoneSeconds: Double? = nil,
         stintSeconds: Double? = nil,
+        longestStintSeconds: Double? = nil,
         awaySeconds: Double? = nil,
         onPhone: Bool? = nil,
         away: Bool? = nil,
@@ -124,6 +125,7 @@ struct Session: Codable, Equatable, Sendable {
             studiedSeconds: studiedSeconds ?? self.studiedSeconds,
             phoneSeconds: phoneSeconds ?? self.phoneSeconds,
             stintSeconds: stintSeconds ?? self.stintSeconds,
+            longestStintSeconds: longestStintSeconds ?? self.longestStintSeconds,
             awaySeconds: awaySeconds ?? self.awaySeconds,
             onPhone: onPhone ?? self.onPhone,
             away: away ?? self.away,

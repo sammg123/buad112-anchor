@@ -29,13 +29,14 @@ struct RootView: View {
         @Bindable var model = model
         Group {
             switch model.screen {
-            case .cover: CoverView()
-            case .page: PageView()
-            case .handback:
-                if let finished = model.finished { HandbackView(session: finished) }
+            case .permissions: PermissionsView()
+            case .start: StartView()
+            case .session: SessionView()
+            case .done:
+                if let finished = model.finished { DoneView(session: finished) }
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: model.screen)
+        .animation(.smooth(duration: 0.35), value: model.screen)
         .preferredColorScheme(.light)
         .alert("Anchor", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
             Button("OK", role: .cancel) {}

@@ -109,19 +109,22 @@ to show the graded cover.
 
 A native version for the phone itself, shipped through TestFlight.
 
-- **Your spot** is where you press *Drop anchor here*. Stop stays locked until you are past 50 m plus GPS slack (at most 100 m).
-- **On your phone** means the phone is unlocked while Anchor is not on screen, at your spot. Then the study timer freezes,
-  the phone clock and tuition cost run (the clock never resets during a session), and a notification buzzes every 15 s.
-  Locking the phone or opening Anchor stops it.
+- **Start:** pick minutes and a lock radius (25 m minimum, up to 200 m), then *Drop anchor here*. Stop stays locked
+  until you are past the radius plus GPS slack (at most 50 m more).
+- **On your phone** means the phone is unlocked while Anchor is not on screen, at your spot. The study timer freezes
+  and the phone clock runs (it never resets during a session). Escalation:
+  0:00 the Lock Screen / Dynamic Island Live Activity turns red; from 0:15 a Time Sensitive notification buzzes every
+  15 s, every 5 s after 1:00; a voice reads your phone time every 30 s; from 2:00 an alarm loops. Locking the phone or
+  opening Anchor stops all of it.
 - **Away** past the unlock distance, the phone is free, nothing counts, and Stop unlocks.
-- **Black and white** needs two one-step shortcuts the student makes once (*Anchor Gray* and *Anchor Color*, each a
-  *Set Color Filters* action); the app walks through it. iOS has no API for an app to do this itself.
+- **Black and white** (Settings) needs two one-step shortcuts the student makes once (*Anchor Gray* and *Anchor Color*,
+  each a *Set Color Filters* action). iOS has no API for an app to do this itself.
 - **Not in this build:** locking other apps. That needs Apple's Screen Time (Family Controls) distribution entitlement,
   which Apple grants by request.
-- Needs a phone passcode (iOS only reports locks when there is one) and Location + Notifications.
+- Needs a phone passcode (iOS only reports locks when there is one), Location, and ideally Notifications.
 
 Build: `cd ios && xcodegen generate`, then `xcodebuild test -scheme Anchor -destination 'platform=iOS Simulator,name=iPhone 17'`.
-The rules live in `ios/Anchor/Core` and are unit tested in `ios/AnchorTests`.
+Ship: `ios/scripts/testflight.sh upload`. The rules live in `ios/Anchor/Core` and are unit tested in `ios/AnchorTests`.
 
 ## Tests
 

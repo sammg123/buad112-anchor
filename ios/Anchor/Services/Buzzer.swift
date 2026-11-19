@@ -12,9 +12,9 @@ final class Buzzer {
 
     private let center = UNUserNotificationCenter.current()
     /// Every id a ladder can use, so a ladder from an earlier launch can always be cleared.
-    private static let allLadderIDs = (0..<2_000).map { "buzz-\($0)" }
-    /// The highest ladder level currently scheduled, so the model can top the ladder up before it runs out.
-    private(set) var scheduledThroughLevel = 0
+    private static let allLadderIDs = (0..<4_000).map { "buzz-\($0)" }
+    /// The phone-clock time of the last buzz scheduled, so the model can top the ladder up before it runs out.
+    private(set) var scheduledThroughSeconds = 0.0
 
     func requestAuthorization() async -> Bool {
         do {
@@ -30,28 +30,35 @@ final class Buzzer {
         return settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
     }
 
-    /// Replace any pending ladder with one that starts at the next step after `phoneSeconds`.
-    func scheduleLadder(phoneSeconds: Double, stintSeconds: Double, tuitionPerYear: Double) {
+    /// Replace any pending ladder with one that starts at the next buzz after `phoneSeconds`.
+    func scheduleLadder(phoneSeconds: Double, stintSeconds: Double) {
         cancelLadder(clearDelivered: false)
-        let buzzes = Ladder.buzzes(phoneSeconds: phoneSeconds, stintSeconds: stintSeconds,
-                                   tuitionPerYear: tuitionPerYear, limit: Ladder.maxPending)
-        scheduledThroughLevel = buzzes.last?.level ?? 0
+        let buzzes = Ladder.buzzes(phoneSeconds: phoneSeconds, stintSeconds: stintSeconds, limit: Ladder.maxPending)
+        scheduledThroughSeconds = phoneSeconds + (buzzes.last?.delay ?? 0)
         for buzz in buzzes {
             let content = UNMutableNotificationContent()
             content.title = buzz.title
             content.body = buzz.body
             content.sound = .default
             content.threadIdentifier = Self.thread
-            content.interruptionLevel = .active
+            // Time Sensitive breaks through a Focus, which is exactly when a student would study.
+            content.interruptionLevel = .timeSensitive
+            content.badge = NSNumber(value: Int((phoneSeconds + buzz.delay) / 60))
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, buzz.delay), repeats: false)
-            add(UNNotificationRequest(identifier: "buzz-\(buzz.level)", content: content, trigger: trigger))
+            add(UNNotificationRequest(identifier: "buzz-\(buzz.index)", content: content, trigger: trigger))
         }
     }
 
     func cancelLadder(clearDelivered: Bool = true) {
         center.removePendingNotificationRequests(withIdentifiers: Self.allLadderIDs)
         if clearDelivered { center.removeDeliveredNotifications(withIdentifiers: Self.allLadderIDs) }
-        scheduledThroughLevel = 0
+        scheduledThroughSeconds = 0
+    }
+
+    func clearBadge() {
+        center.setBadgeCount(0) { error in
+            if let error { Self.log.error("badge reset failed: \(error.localizedDescription, privacy: .public)") }
+        }
     }
 
     /// The "session done" notice at the projected finish, or none while the study clock is stopped.

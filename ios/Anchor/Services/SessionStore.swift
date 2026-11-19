@@ -4,14 +4,20 @@ import os
 /// Keeps the running session (and the last one, for its grade) across app restarts.
 struct SessionStore {
     private static let log = Logger(subsystem: "com.sammg123.anchor", category: "store")
-    private static let runningKey = "anchor.session.v1"
-    private static let finishedKey = "anchor.finished.v1"
-    private static let configKey = "anchor.config.v1"
+    private static let runningKey = "anchor.session.v2"
+    private static let finishedKey = "anchor.finished.v2"
+    private static let configKey = "anchor.config.v2"
+    private static let onboardedKey = "anchor.onboarded.v1"
 
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+    }
+
+    var hasOnboarded: Bool {
+        get { defaults.bool(forKey: Self.onboardedKey) }
+        nonmutating set { defaults.set(newValue, forKey: Self.onboardedKey) }
     }
 
     func loadRunning() -> Session? { load(Session.self, key: Self.runningKey) }
