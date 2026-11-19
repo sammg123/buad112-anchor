@@ -105,6 +105,24 @@ to show the graded cover.
 | `ANCHOR_OVERLAY=0` | on | Skip the Mac overlay; the page draws the effects inside the tab instead |
 | `ANCHOR_DATA` | `./data` | Where the session is saved |
 
+## iPhone app (`ios/`)
+
+A native version for the phone itself, shipped through TestFlight.
+
+- **Your spot** is where you press *Drop anchor here*. Stop stays locked until you are past 50 m plus GPS slack (at most 100 m).
+- **On your phone** means the phone is unlocked while Anchor is not on screen, at your spot. Then the study timer freezes,
+  the phone clock and tuition cost run (the clock never resets during a session), and a notification buzzes every 15 s.
+  Locking the phone or opening Anchor stops it.
+- **Away** past the unlock distance, the phone is free, nothing counts, and Stop unlocks.
+- **Black and white** needs two one-step shortcuts the student makes once (*Anchor Gray* and *Anchor Color*, each a
+  *Set Color Filters* action); the app walks through it. iOS has no API for an app to do this itself.
+- **Not in this build:** locking other apps. That needs Apple's Screen Time (Family Controls) distribution entitlement,
+  which Apple grants by request.
+- Needs a phone passcode (iOS only reports locks when there is one) and Location + Notifications.
+
+Build: `cd ios && xcodegen generate`, then `xcodebuild test -scheme Anchor -destination 'platform=iOS Simulator,name=iPhone 17'`.
+The rules live in `ios/Anchor/Core` and are unit tested in `ios/AnchorTests`.
+
 ## Tests
 
 ```bash

@@ -1,0 +1,47 @@
+import Foundation
+import os
+
+/// Keeps the running session (and the last one, for its grade) across app restarts.
+struct SessionStore {
+    private static let log = Logger(subsystem: "com.sammg123.anchor", category: "store")
+    private static let runningKey = "anchor.session.v1"
+    private static let finishedKey = "anchor.finished.v1"
+    private static let configKey = "anchor.config.v1"
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func loadRunning() -> Session? { load(Session.self, key: Self.runningKey) }
+    func loadFinished() -> Session? { load(Session.self, key: Self.finishedKey) }
+    func loadConfig() -> SessionConfig? { load(SessionConfig.self, key: Self.configKey) }
+
+    func saveRunning(_ session: Session?) { save(session, key: Self.runningKey) }
+    func saveFinished(_ session: Session?) { save(session, key: Self.finishedKey) }
+    func saveConfig(_ config: SessionConfig) { save(config, key: Self.configKey) }
+
+    private func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            Self.log.error("dropping unreadable \(key, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            defaults.removeObject(forKey: key)
+            return nil
+        }
+    }
+
+    private func save<T: Encodable>(_ value: T?, key: String) {
+        guard let value else {
+            defaults.removeObject(forKey: key)
+            return
+        }
+        do {
+            defaults.set(try JSONEncoder().encode(value), forKey: key)
+        } catch {
+            Self.log.error("could not save \(key, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+}

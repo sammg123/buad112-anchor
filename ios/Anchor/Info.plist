@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<key>CFBundleDisplayName</key><string>Anchor</string>
+	<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key><true/>
+	<key>ITSAppUsesNonExemptEncryption</key><false/>
+	<key>UILaunchScreen</key><dict><key>UIColorName</key><string>Cover</string></dict>
+	<key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
+	<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
+	<key>UIBackgroundModes</key><array><string>location</string></array>
+	<key>NSLocationWhenInUseUsageDescription</key><string>Anchor drops a pin where you study. Stop stays locked until you walk 50 m away from it.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>Anchor keeps checking how far you are from your study spot while you use other apps, so it can buzz you at the spot and leave you alone once you walk away.</string>
+	<key>LSApplicationQueriesSchemes</key><array><string>shortcuts</string></array>
+	<key>CFBundleURLTypes</key>
+	<array><dict>
+		<key>CFBundleURLName</key><string>com.sammg123.anchor</string>
+		<key>CFBundleURLSchemes</key><array><string>anchorstudy</string></array>
+	</dict></array>
+	<key>UIAppFonts</key><array><string>Kalam-Bold.ttf</string></array>
+</dict>
+</plist>

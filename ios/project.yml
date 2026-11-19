@@ -1,0 +1,48 @@
+name: Anchor
+options:
+  bundleIdPrefix: com.sammg123
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    DEVELOPMENT_TEAM: PY94U6N48R
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Anchor:
+    type: application
+    platform: iOS
+    sources:
+      - path: Anchor
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sammg123.anchor
+        PRODUCT_NAME: Anchor
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_FILE: Anchor/Info.plist
+        ENABLE_PREVIEWS: YES
+  AnchorTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: AnchorTests
+    dependencies:
+      - target: Anchor
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.sammg123.anchor.tests
+schemes:
+  Anchor:
+    build:
+      targets:
+        Anchor: all
+        AnchorTests: [test]
+    test:
+      targets:
+        - AnchorTests
