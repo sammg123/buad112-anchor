@@ -6,7 +6,7 @@ export const LEVEL_MS = 15_000;
 /** Library mode cuts the three sound steps, so each remaining step lasts longer. */
 export const QUIET_LEVEL_MS = 20_000;
 
-/** Stop stays locked while you are within this many meters of where you started. */
+/** Stop stays locked while you are within this many meters of where you started, unless the session picks its own. */
 export const RADIUS_M = 50;
 
 /** Study seconds added per phone second once the penalty step is reached. */
@@ -58,6 +58,8 @@ export const LIMITS = Object.freeze({
   maxDollarsPerMinute: 100,
   maxTuitionPerYear: 500_000,
   maxCourseName: 40,
+  minRadiusM: 10,
+  maxRadiusM: 400,
   maxSimulatedM: 500,
   maxConfession: 200,
   maxAccuracyM: 100_000,

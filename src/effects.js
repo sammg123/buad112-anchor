@@ -16,7 +16,7 @@ export const VOLUME_FLOOR = Object.freeze({ tick: 35, siren: 70 });
 /** While a floor is on, push it again this often in case it was turned down or muted. */
 export const VOLUME_REASSERT_MS = 5_000;
 
-const ladderOfSnap = (snap) => ladderFor(snap.quiet === true, Boolean(snap.deposit));
+const ladderOfSnap = (snap) => ladderFor(snap.quiet === true, Boolean(snap.deposit), snap.mode);
 
 /**
  * Blur comes in waves so the screen stays usable between them. The cycle length is fixed, so the rhythm

@@ -189,6 +189,28 @@ describe('location and stopping', () => {
     assert.equal(done.endedEarly, true);
   });
 
+  test('drops the anchor at the fix sent with start, not an earlier one', () => {
+    const earlier = updateLocation(createIdle(), { lat: ANCHOR.lat + 0.01, lng: ANCHOR.lng, accuracy: 5 }, T0 - 5000);
+    const s = startSession(earlier, { ...CONFIG, anchor: { lat: ANCHOR.lat, lng: ANCHOR.lng, accuracy: 7 } }, T0);
+    assert.deepEqual(s.location.anchor, { lat: ANCHOR.lat, lng: ANCHOR.lng, accuracy: 7 });
+    assert.equal(snapshot(s, T0).location.distanceM, 0);
+    assert.equal('anchor' in s.config, false);
+  });
+
+  test('reports location in whole meters', () => {
+    let s = startSession(createIdle(), { ...CONFIG, anchor: { ...ANCHOR, accuracy: 9.11 } }, T0);
+    s = updateLocation(s, { lat: ANCHOR.lat + 0.00013, lng: ANCHOR.lng, accuracy: 7.4 }, T0 + 1000);
+    const loc = snapshot(s, T0 + 1000).location;
+    for (const key of ['distanceM', 'accuracyM', 'unlockAtM']) assert.ok(Number.isInteger(loc[key]), `${key} ${loc[key]}`);
+  });
+
+  test('uses the zone size picked at start', () => {
+    const s = setSimulatedDistance(running({ radiusM: 150 }), 120);
+    assert.equal(snapshot(s, T0).canStop, false);
+    assert.equal(snapshot(s, T0).location.radiusM, 150);
+    assert.equal(snapshot(setSimulatedDistance(s, 160), T0).canStop, true);
+  });
+
   test('going back to real location clears the simulated distance', () => {
     let s = setSimulatedDistance(updateLocation(running(), ANCHOR, T0), 80);
     s = setSimulatedDistance(s, null);

@@ -441,9 +441,13 @@ function renderTuitionHint() {
 function readStartForm(form) {
   const data = new FormData(form);
   const studyMinutes = Number(data.get('studyMinutes'));
+  const radiusM = Number(data.get('radiusM'));
   const tuitionPerYear = parseTuition(data.get('tuitionPerYear'));
   if (!Number.isInteger(studyMinutes) || studyMinutes < 1 || studyMinutes > 240) {
     return { error: 'Minutes must be a whole number from 1 to 240.' };
+  }
+  if (!Number.isInteger(radiusM) || radiusM < 10 || radiusM > 400) {
+    return { error: 'Zone size must be a whole number of meters from 10 to 400.' };
   }
   if (tuitionPerYear === null) {
     return { error: "Enter your college's yearly tuition, like 70,000." };
@@ -453,7 +457,7 @@ function readStartForm(form) {
   if (deposit === null) {
     return { error: `Deposit must be an amount like 5 or 12.50, up to ${dollars(DEPOSIT_MAX)}, or left empty.` };
   }
-  return { value: { studyMinutes, tuitionPerYear, quiet, deposit, courseName: String(data.get('courseName') ?? '').trim() } };
+  return { value: { studyMinutes, radiusM, tuitionPerYear, quiet, deposit, courseName: String(data.get('courseName') ?? '').trim() } };
 }
 
 function wireEvents() {
@@ -466,9 +470,7 @@ function wireEvents() {
       setText('start-error', parsed.error);
       return;
     }
-    geo.lastSentAt = 0;
-    sendLocation();
-    await act($('start-btn'), 'start-error', '/api/start', parsed.value);
+    await act($('start-btn'), 'start-error', '/api/start', { ...parsed.value, anchor: geo.fix ?? null });
   });
 
   $('phone-btn').addEventListener('click', (event) => {
@@ -543,6 +545,42 @@ function connect() {
   };
 }
 
+/* ---------- pairing card (phone mode) ---------- */
+
+async function loadPairing() {
+  try {
+    const res = await fetch('/api/connect');
+    const data = (await res.json()).data;
+    if (data?.error) {
+      setText('pair-caption', data.error);
+      show('pair', true);
+    }
+    if (data?.url) {
+      $('pair-qr').innerHTML = data.guestQrSvg || data.qrSvg; // trusted server output
+      setText('pair-caption', data.guestQrSvg ? 'Scan to try Anchor' : 'Scan with your iPhone camera');
+      setText('pair-guest', data.guestUrl || '');
+      $('pair-owner-qr').innerHTML = data.qrSvg; // trusted server output
+      setText('pair-base', data.base);
+      setText('pair-key', data.token);
+      show('pair-owner-btn', Boolean(data.guestQrSvg));
+      show('pair', true);
+      return;
+    }
+  } catch {
+    /* server not ready yet; retry below */
+  }
+  setTimeout(loadPairing, 3000);
+}
+
+function wirePairing() {
+  $('pair-owner-btn').addEventListener('click', () => {
+    const open = $('pair-owner').hidden;
+    show('pair-owner', open);
+    $('pair-owner-btn').setAttribute('aria-expanded', String(open));
+    setText('pair-owner-btn', open ? 'Hide my phone\'s QR' : 'Show my phone\'s QR (private)');
+  });
+}
+
 async function init() {
   try {
     const res = await fetch('/api/rules');
@@ -560,6 +598,8 @@ async function init() {
   renderAnchorStatus();
   startLocation();
   connect();
+  wirePairing();
+  loadPairing();
 }
 
 init();

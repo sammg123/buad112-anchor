@@ -1,5 +1,40 @@
 # Anchor
 
+## Phone prototype (BUAD 112 demo)
+
+Anchor punishes your **phone**. Inside a 50 m zone around your anchor, opening a distracting app (via iOS Shortcuts) bounces you to Anchor's gate page and makes you wait, then greys and dims the phone, shows tuition burned, demands a typed confession, and drains a deposit.
+
+**Setup (recommended: ngrok static domain)**
+
+1. Make a free account at ngrok.com. Copy your **authtoken** (dashboard, "Your Authtoken") and claim your free **static domain** (dashboard, Domains). Nothing to install: ngrok comes with `npm install`.
+2. First time: `npm install && NGROK_AUTHTOKEN=your-token NGROK_DOMAIN=your-name.ngrok-free.app npm start`. Both are remembered in `data/ngrok.json` (not committed), so after that it's just `npm start`. The URL never changes, so the Home Screen app and the Shortcuts never need updating. The key also survives restarts.
+3. Open http://localhost:5112 on the Mac and scan the QR code with your iPhone camera. Add the page to your Home Screen.
+4. Set up the Shortcuts: [docs/shortcuts.md](docs/shortcuts.md). Without them, the phone page has a Presenter panel with "Simulate opening Instagram" and "Simulate opening Settings".
+
+**No account? Cloudflare fallback:** `brew install cloudflared` (or download the macOS binary from https://github.com/cloudflare/cloudflared/releases to `~/.local/bin/cloudflared`), then `npm install && npm start` with no ngrok settings saved. The URL changes each run, so update "Anchor Config" before every demo.
+
+**Phone ladder** (one step per 15 s on the phone). Effects stay on until you leave the zone.
+
+| On phone | Step | What happens | Gate wait | Pass after |
+|---|---|---|---|---|
+| 0:00 | Gate | Opening an app bounces you to Anchor | 10 s | 90 s |
+| 0:15 | Grayscale | The phone goes grey | 12 s | 80 s |
+| 0:30 | Loud | Silent mode off, volume 100% | 15 s | 70 s |
+| 0:45 | Dim | Brightness 15% | 20 s | 60 s |
+| 1:00 | Receipt | Tuition burned, live on the gate | 25 s | 50 s |
+| 1:15 | Huge text | Text size maxed | 30 s | 40 s |
+| 1:45 | Flashing | The whole phone flashes in every app, over and over | 45 s | 25 s |
+| 2:00 | Confession | Type the phrase to pass the gate | 50 s | 20 s |
+| 2:15 | Deposit | Deposit drains (only if you put one down) | 60 s | 15 s |
+
+**Guest mode:** the QR on the Mac page is now a guest QR. Classmates who scan it land on `/guest.html`, which shows the presenter's session live (study time, phone time, current step, tuition burned, deposit, grade) and lets them try a sandbox of the ladder on their own phone. Guests are read-only and the sandbox sends nothing to the server. The "Show my phone's QR (private)" button reveals the owner QR. Delete `data/guest-token.txt` to rotate the guest key.
+
+Opening Settings inside the zone bounces you to a locked screen. (iOS won't let an automation watch the Shortcuts app itself, so that one gap stays open.) The Mac effects (sound, speech, overlay) are opt-in: `ANCHOR_MAC=1 npm start`.
+
+---
+
+## Mac mode (original MVP)
+
 A study timer you can't quietly quit. BUAD112 MVP.
 
 You drop an anchor where you study. While you're within 50 m of it, **Stop is locked**.

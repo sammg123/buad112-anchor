@@ -44,6 +44,24 @@ function buildLadder(steps, levelMs, quiet) {
   });
 }
 
+/**
+ * Phone mode: the punishment lands on the phone itself, through iOS Shortcuts automations
+ * (see docs/shortcuts.md). Every app open inside the zone bounces to Anchor's gate page.
+ */
+const PHONE_STEPS = Object.freeze(
+  [
+    { id: 'gate', name: 'Gate', note: 'Opening an app bounces you to Anchor and makes you wait', sound: false },
+    { id: 'gray', name: 'Grayscale', note: 'The whole phone goes grey', sound: false },
+    { id: 'loud', name: 'Loud', note: 'Silent mode off, volume all the way up, alarm and voice', sound: true },
+    { id: 'dim', name: 'Dim', note: 'Brightness drops to 15%', sound: false },
+    { id: 'cost', name: 'Receipt', note: 'Tuition burned, counted live on the gate', sound: false },
+    { id: 'text', name: 'Huge text', note: 'Text size maxed out, feeds are a slog', sound: false },
+    { id: 'flash', name: 'Flashing', note: 'The whole phone flashes, in every app, over and over', sound: false },
+    { id: 'confess', name: 'Confession', note: 'Type it to get past the gate (once)', sound: false },
+    { id: 'deposit', name: 'Deposit', note: 'Your deposit drains, a bigger bite every minute', sound: false },
+  ].map((step) => Object.freeze(step)),
+);
+
 const keep = (pred) => Object.freeze(ALL_STEPS.filter(pred));
 const notDeposit = (step) => step.id !== 'deposit';
 
@@ -57,21 +75,37 @@ export const QUIET_LADDER = buildLadder(keep((step) => !step.sound), QUIET_LEVEL
 const NORMAL_NO_DEPOSIT = buildLadder(keep(notDeposit), LEVEL_MS, false);
 const QUIET_NO_DEPOSIT = buildLadder(keep((step) => !step.sound && notDeposit(step)), QUIET_LEVEL_MS, true);
 
+/** Phone mode: one step every 15 s, so the deposit lands at 2:15 on the phone. */
+export const PHONE_LADDER = buildLadder(PHONE_STEPS, LEVEL_MS, false);
+const PHONE_NO_DEPOSIT = buildLadder(Object.freeze(PHONE_STEPS.filter(notDeposit)), LEVEL_MS, false);
+
+/** Library mode on the phone: the Loud step is cut, so nothing ever makes a sound. */
+const phoneKeep = (pred) => Object.freeze(PHONE_STEPS.filter(pred));
+const PHONE_QUIET = buildLadder(phoneKeep((step) => !step.sound), LEVEL_MS, true);
+const PHONE_QUIET_NO_DEPOSIT = buildLadder(phoneKeep((step) => !step.sound && notDeposit(step)), LEVEL_MS, true);
+
 /**
  * @param {boolean} quiet library mode
  * @param {boolean} [hasDeposit] whether money was put down
+ * @param {'mac' | 'phone'} [mode] where the punishment lands
  */
-export function ladderFor(quiet, hasDeposit = true) {
+export function ladderFor(quiet, hasDeposit = true, mode = 'mac') {
+  if (mode === 'phone' && quiet) return hasDeposit ? PHONE_QUIET : PHONE_QUIET_NO_DEPOSIT;
+  if (mode === 'phone') return hasDeposit ? PHONE_LADDER : PHONE_NO_DEPOSIT;
   if (quiet) return hasDeposit ? QUIET_LADDER : QUIET_NO_DEPOSIT;
   return hasDeposit ? NORMAL_LADDER : NORMAL_NO_DEPOSIT;
 }
 
-/** The four ladders by name, for the page's rubric. */
+/** Every ladder by name, for the pages' rubrics. */
 export const LADDERS = Object.freeze({
   normal: NORMAL_LADDER,
   quiet: QUIET_LADDER,
   'normal-nodeposit': NORMAL_NO_DEPOSIT,
   'quiet-nodeposit': QUIET_NO_DEPOSIT,
+  phone: PHONE_LADDER,
+  'phone-nodeposit': PHONE_NO_DEPOSIT,
+  'phone-quiet': PHONE_QUIET,
+  'phone-quiet-nodeposit': PHONE_QUIET_NO_DEPOSIT,
 });
 
 // Normal-mode shortcuts, used where the mode doesn't matter or by tests.

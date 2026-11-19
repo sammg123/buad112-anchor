@@ -1,0 +1,15 @@
+/* Guest page: reuses phone.css; only what the sandbox adds. */
+.big--med { font-size: 3.5rem; }
+.circled { display: inline-block; padding: 0 12px; border: 2px solid var(--pen); border-radius: 99px; }
+.gate__back--ink { color: var(--ink); align-self: flex-start; }
+.feedscreen { position: fixed; inset: 0; z-index: 20; background: var(--paper); overflow-y: auto; padding: calc(var(--safe-t) + 12px) 16px calc(var(--safe-b) + 90px); }
+.feedscreen__bar { display: flex; justify-content: space-between; font-size: 1.2rem; padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
+.feedscreen__bar span { font: 700 1rem var(--hand); color: var(--pen); }
+.post { margin-top: 14px; }
+.post__who { margin: 0 0 4px; font-weight: 700; }
+.post__art { min-height: 150px; border-radius: 8px; padding: 14px; color: #fff; font-weight: 700; display: flex; align-items: flex-end; }
+.post__art--a { background: #d9902f; } .post__art--b { background: #c4553a; } .post__art--c { background: #7a68a6; }
+.feedscreen__actions { position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; display: flex; gap: 8px; padding: 10px 16px calc(var(--safe-b) + 10px); background: var(--paper); border-top: 1px solid var(--rule); }
+.flash { position: fixed; inset: 0; z-index: 60; background: #fff; opacity: 0; pointer-events: none; }
+.flash[data-on="true"] { opacity: 1; }
+.dim { z-index: 45; }

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Anchor">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#a9c7ec">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <title>Anchor: try it</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="phone.css">
+  <link rel="stylesheet" href="guest.css">
+  <script src="guest.js" type="module"></script>
+</head>
+<body>
+  <main class="screen" id="page">
+    <header class="masthead">
+      <h1 class="masthead__title">Anchor</h1>
+      <p class="masthead__sub">A study timer that makes your phone a pain.</p>
+    </header>
+
+    <section class="sheet" aria-labelledby="live-title">
+      <h2 class="label" id="live-title">Live: the presenter's phone</h2>
+      <p class="hint">Every time they open Instagram inside 50 m of their desk, their phone gets worse.</p>
+      <p class="pen-line" id="live-wait" hidden>Waiting for the presenter to drop the anchor</p>
+      <div id="live-body" hidden>
+        <p class="masthead__course" id="live-course">BUAD 112</p>
+        <p class="label">Left to study</p>
+        <p class="big big--med" id="live-time">0:00</p>
+        <p class="pen-line">On their phone <strong id="live-phone">0:00</strong></p>
+        <p class="pen-line" id="live-step-line">Step: <span class="circled" id="live-step">Gate</span></p>
+        <p class="loc">Tuition burned <strong id="live-cost">$0.00</strong> <span id="live-dep"></span></p>
+        <ol class="rubric" id="live-rubric"></ol>
+      </div>
+      <div class="grade" id="live-grade" hidden><p class="grade__label">Final grade</p><p class="grade__mark" id="live-grade-mark">A</p></div>
+      <p class="error" id="live-error" role="status"></p>
+    </section>
+
+    <section class="sheet" aria-labelledby="try-title">
+      <h2 class="label" id="try-title">Try it on your phone</h2>
+      <div id="try-idle">
+        <button class="btn btn--pen" type="button" id="try-start">Pretend you just opened Instagram</button>
+      </div>
+      <div id="try-closed" hidden>
+        <p class="pen-line" id="try-status"></p>
+        <button class="btn btn--pen" type="button" id="try-reopen">Reopen Instagram</button>
+        <button class="btn btn--outline" type="button" id="try-walk">Walk away 50 m</button>
+      </div>
+      <div id="try-done" hidden>
+        <div class="grade"><p class="grade__label">Your sandbox grade</p><p class="grade__mark" id="try-grade">A</p><p id="try-summary"></p></div>
+        <button class="btn btn--ink" type="button" id="try-again">Try again</button>
+      </div>
+      <p class="hint">This is a sandbox. On the presenter's phone this happens to the whole iPhone through Shortcuts.</p>
+      <button class="gate__back gate__back--ink" type="button" id="try-reset">Reset</button>
+    </section>
+  </main>
+
+  <!-- sandbox: gate -->
+  <main class="gate" id="sb-gate" hidden>
+    <div class="gate__inner">
+      <p class="gate__kicker">You're at your anchor.</p>
+      <p class="gate__count" id="sb-count">2</p>
+      <p class="gate__line" id="sb-line">Wait. Then decide if you really need this app.</p>
+      <p class="gate__cost" id="sb-gate-cost" hidden>Tuition burned: <strong id="sb-gate-amt">$0.00</strong></p>
+      <p class="gate__fx" id="sb-fx" hidden></p>
+      <form class="gate__confess" id="sb-form" hidden>
+        <p class="gate__phrase" id="sb-phrase"></p>
+        <input class="gate__input" id="sb-input" autocomplete="off" autocapitalize="off" aria-label="Type the sentence">
+      </form>
+      <button class="btn btn--paper" type="button" id="sb-continue" disabled>Continue</button>
+      <button class="gate__back" type="button" id="sb-gate-walk">Walk away 50 m</button>
+    </div>
+  </main>
+
+  <!-- sandbox: fake Instagram -->
+  <main class="feedscreen" id="sb-feed" hidden>
+    <header class="feedscreen__bar"><strong>Instagram</strong> <span id="sb-hud"></span></header>
+    <article class="post"><p class="post__who">dininghall.reviews</p><div class="post__art post__art--a">Pasta night. 4/10.</div></article>
+    <article class="post"><p class="post__who">buad.memes</p><div class="post__art post__art--b">Me opening Instagram for "one second"</div></article>
+    <article class="post"><p class="post__who">dogsofcampus</p><div class="post__art post__art--c">Biscuit does not have a midterm.</div></article>
+    <div class="feedscreen__actions">
+      <button class="btn btn--ink btn--small" type="button" id="sb-close">Close Instagram</button>
+      <button class="btn btn--outline btn--small" type="button" id="sb-feed-walk">Walk away 50 m</button>
+    </div>
+  </main>
+
+  <!-- sandbox: flash + dim -->
+  <div class="flash" id="sb-flash" aria-hidden="true"></div>
+  <div class="dim" id="sb-dim" aria-hidden="true"></div>
+</body>
+</html>

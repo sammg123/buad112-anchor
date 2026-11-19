@@ -1,0 +1,13 @@
+{
+  "note": "iCloud links to the Anchor shortcuts. Build them once on an iPhone (docs/shortcuts.md), Share, Copy iCloud Link, paste here.",
+  "links": [
+    { "name": "Anchor Config", "url": "" },
+    { "name": "Anchor Apply", "url": "" },
+    { "name": "Anchor Restore", "url": "" },
+    { "name": "Anchor Enforcer", "url": "" },
+    { "name": "Anchor App Opened", "url": "" },
+    { "name": "Anchor App Closed", "url": "" },
+    { "name": "Anchor Guard", "url": "" },
+    { "name": "Anchor Leave", "url": "" }
+  ]
+}

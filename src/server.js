@@ -2,14 +2,27 @@
  * Localhost HTTP server: static page, JSON API, and a server-sent-events stream.
  * Only answers requests addressed to this machine's loopback name, and only accepts
  * same-origin JSON posts, so another website cannot drive the session.
+ * Phone mode: with a token set, the page is also served through a tunnel, and any request carrying
+ * the token (the `x-anchor-key` header or `?k=`) may use the API: the phone page and its iOS Shortcuts.
+ * A guest token (classmates scanning the projector QR) can only read a trimmed state; it changes nothing.
  */
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseStart, parseLocation, parsePhone, parseDemo, parseConfess } from './validate.js';
+import {
+  parseStart,
+  parseLocation,
+  parsePhone,
+  parseDemo,
+  parseConfess,
+  parsePhoneEvent,
+  parseGatePass,
+} from './validate.js';
 import { createLogger } from './log.js';
 import { LADDER, LADDERS } from './ladder.js';
 import { DEPOSIT_MAX } from './deposit.js';
+import { GATE_SECONDS, PASS_SECONDS } from './phone.js';
 import { LEVEL_MS, RADIUS_M, CONFESSION_PHRASE, CLASS_MINUTES_PER_YEAR, LIMITS } from './config.js';
 
 const RULES = Object.freeze({
@@ -20,6 +33,8 @@ const RULES = Object.freeze({
   classMinutesPerYear: CLASS_MINUTES_PER_YEAR,
   maxTuitionPerYear: LIMITS.maxTuitionPerYear,
   depositMax: DEPOSIT_MAX,
+  gateSeconds: GATE_SECONDS,
+  passSeconds: PASS_SECONDS,
   ladders: Object.fromEntries(
     Object.entries(LADDERS).map(([name, ladder]) => [name, { steps: ladder.steps, levelMs: ladder.levelMs }]),
   ),
@@ -37,11 +52,14 @@ const CONTENT_TYPES = Object.freeze({
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json',
+  '.json': 'application/json; charset=utf-8',
+  '.wav': 'audio/wav',
 });
 
 const SECURITY_HEADERS = Object.freeze({
   'content-security-policy':
-    "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
   'cache-control': 'no-store',
@@ -111,13 +129,24 @@ function postRoutes(app) {
     '/api/location': validated(parseLocation, (fix) => app.location(fix)),
     '/api/demo': validated(parseDemo, (demo) => app.demo(demo)),
     '/api/confess': validated(parseConfess, (text) => app.confess(text)),
+    '/api/phone/open': validated(parsePhoneEvent, (event) => app.phoneOpened(event)),
+    '/api/phone/close': validated(parsePhoneEvent, (event) => app.phoneClosed(event)),
+    '/api/phone/guard': validated(parsePhoneEvent, (event) => app.phoneGuarded(event)),
+    '/api/phone/where': validated(parsePhoneEvent, (event) => app.phoneWhere(event)),
+    '/api/gate': validated(parseGatePass, (text) => app.passGate(text)),
     '/api/stop': () => app.stop(),
     '/api/reset': () => app.reset(),
   });
 }
 
 function serveEvents(req, res, app, streams) {
-  if (streams.size >= MAX_EVENT_STREAMS) return failure(res, 503, 'Too many open Anchor tabs. Close one and reload.');
+  // Full: the newest tab wins. Through a tunnel, a phone that went to sleep leaves its stream open
+  // for a long time, so refusing new ones would lock out the page you're actually looking at.
+  const oldest = streams.size >= MAX_EVENT_STREAMS ? streams.values().next().value : null;
+  if (oldest) {
+    streams.delete(oldest);
+    oldest.end();
+  }
   streams.add(res);
   res.writeHead(200, {
     ...SECURITY_HEADERS,
@@ -128,47 +157,148 @@ function serveEvents(req, res, app, streams) {
   const send = (snap) => !res.writableNeedDrain && res.write(`data: ${JSON.stringify(snap)}\n\n`);
   send(app.state());
   const unsubscribe = app.subscribe(send);
-  req.on('close', () => {
+  const drop = () => {
     unsubscribe();
     streams.delete(res);
-  });
+  };
+  req.on('close', drop);
+  res.on('close', drop);
   return undefined;
 }
 
-function serveStatic(pathname, res, publicDir) {
-  const relative = pathname === '/' ? 'index.html' : pathname.slice(1);
+/**
+ * A single `bytes=start-end` range, clamped to the file, or null for the whole file.
+ * iPhone Safari won't play audio from a server that can't answer range requests.
+ */
+export function parseRange(header, size) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(String(header ?? '').trim());
+  if (!match || (match[1] === '' && match[2] === '')) return null;
+  const start = match[1] === '' ? Math.max(0, size - Number(match[2])) : Number(match[1]);
+  const end = match[1] === '' || match[2] === '' ? size - 1 : Math.min(size - 1, Number(match[2]));
+  return start <= end && start < size ? { start, end } : { start: size, end: size - 1 };
+}
+
+function serveStatic(pathname, res, publicDir, home = 'index.html', rangeHeader = undefined) {
+  const relative = pathname === '/' ? home : pathname.slice(1);
   const resolved = path.resolve(publicDir, relative);
   const insidePublic = resolved.startsWith(publicDir + path.sep);
   const type = CONTENT_TYPES[path.extname(resolved)];
   if (!insidePublic || !type || relative.includes('\0')) return failure(res, 404, 'Not found.');
   fs.readFile(resolved, (error, data) => {
     if (error) return failure(res, 404, 'Not found.');
-    res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': type });
-    return res.end(data);
+    const headers = { ...SECURITY_HEADERS, 'content-type': type, 'accept-ranges': 'bytes' };
+    const range = parseRange(rangeHeader, data.length);
+    if (!range) {
+      res.writeHead(200, headers);
+      return res.end(data);
+    }
+    if (range.start > range.end) {
+      res.writeHead(416, { ...headers, 'content-range': `bytes */${data.length}` });
+      return res.end();
+    }
+    res.writeHead(206, { ...headers, 'content-range': `bytes ${range.start}-${range.end}/${data.length}` });
+    return res.end(data.subarray(range.start, range.end + 1));
   });
   return undefined;
 }
 
+/** Constant-time token check. */
+function matches(given, token) {
+  if (!token) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(token);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** 'owner' (the presenter's phone, Shortcuts), 'guest' (read-only), or null. */
+function keyRole(req, url, token, guestToken) {
+  const given = String(req.headers['x-anchor-key'] ?? url.searchParams.get('k') ?? '');
+  if (matches(given, token)) return 'owner';
+  if (matches(given, guestToken)) return 'guest';
+  return null;
+}
+
+/** What a guest sees of the live session: the show, not the controls or the location. */
+export function guestView(snap) {
+  return {
+    status: snap.status,
+    mode: snap.mode,
+    quiet: snap.quiet,
+    demoSpeed: snap.demoSpeed,
+    courseName: snap.config?.courseName ?? null,
+    study: { remainingMs: snap.study.remainingMs, targetMs: snap.study.targetMs },
+    phone: {
+      onPhone: snap.phone.onPhone,
+      totalMs: snap.phone.totalMs,
+      pickups: snap.phone.pickups,
+      level: snap.phone.level,
+      levelId: snap.phone.levelId,
+      levelName: snap.phone.levelName,
+      maxLevel: snap.phone.maxLevel,
+    },
+    cost: snap.cost,
+    away: snap.away,
+    deposit: snap.deposit ? { total: snap.deposit.total, left: snap.deposit.left } : null,
+    grade: snap.summary?.grade ?? null,
+  };
+}
+
 /**
- * @param {{ app: ReturnType<typeof import('./app.js').createApp>, publicDir: string, log?: ReturnType<typeof createLogger> }} deps
+ * @param {{
+ *   app: ReturnType<typeof import('./app.js').createApp>,
+ *   publicDir: string,
+ *   log?: ReturnType<typeof createLogger>,
+ *   token?: string | null,
+ *   guestToken?: string | null,
+ *   home?: string,
+ *   connect?: () => { url: string | null, qrSvg: string | null },
+ * }} deps
  * @returns {http.Server}
  */
-export function createHttpServer({ app, publicDir, log = createLogger() }) {
+export function createHttpServer({
+  app,
+  publicDir,
+  log = createLogger(),
+  token = null,
+  guestToken = null,
+  home = 'index.html',
+  connect = () => ({ url: null, qrSvg: null }),
+}) {
   const root = path.resolve(publicDir);
   const routes = postRoutes(app);
   const streams = new Set();
 
   async function handle(req, res, port) {
-    if (!isLoopbackHost(req.headers.host, port)) return failure(res, 403, 'Anchor only answers on localhost.');
-    const { pathname } = new URL(req.url ?? '/', `http://localhost:${port}`);
+    const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+    const { pathname } = url;
+    const local = isLoopbackHost(req.headers.host, port);
+    const role = keyRole(req, url, token, guestToken);
+    const keyed = role === 'owner';
+    // Through the tunnel the page itself is public (it holds nothing); everything live needs the token.
+    const isPage = req.method === 'GET' && !pathname.startsWith('/api/') && pathname !== '/events';
+    if (role === 'guest' && !isPage) {
+      // Guests poll instead of streaming, so a whole class can't use up the live-update slots.
+      if (req.method === 'GET' && pathname === '/api/rules') return success(res, RULES);
+      if (req.method === 'GET' && pathname === '/api/guest') return success(res, guestView(app.state()));
+      return failure(res, 403, 'Guests can watch, not touch.');
+    }
+    if (!local && !keyed && !(token && isPage)) return failure(res, 403, 'Anchor only answers on localhost.');
 
+    if (req.method === 'GET' && pathname === '/api/connect') {
+      // The owner key already opens everything, so a presenter screen opened with it (a classroom computer) gets the QR too.
+      return local || keyed ? success(res, connect()) : failure(res, 403, 'Only the Mac can show the pairing code.');
+    }
+    if (req.method === 'GET' && pathname === '/api/phone/now') return success(res, app.phoneNow());
     if (req.method === 'GET' && pathname === '/api/state') return success(res, app.state());
     if (req.method === 'GET' && pathname === '/api/rules') return success(res, RULES);
     if (req.method === 'GET' && pathname === '/events') return serveEvents(req, res, app, streams);
-    if (req.method === 'GET') return serveStatic(pathname, res, root);
+    if (req.method === 'GET') return serveStatic(pathname, res, root, home, req.headers.range);
     if (req.method !== 'POST') return failure(res, 405, 'Method not allowed.');
 
-    if (!allowedOrigins(port).includes(req.headers.origin)) return failure(res, 403, 'Cross-site requests are not allowed.');
+    // A keyed request (phone page, Shortcuts) proved itself; Shortcuts send no Origin at all.
+    if (!keyed && !allowedOrigins(port).includes(req.headers.origin)) {
+      return failure(res, 403, 'Cross-site requests are not allowed.');
+    }
     if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) {
       return failure(res, 415, 'Send JSON.');
     }

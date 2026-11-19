@@ -15,7 +15,7 @@ FORM: Blue book + grading rubric, first on the list; staging = cover / open page
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Anchor</title>
-  <meta name="description" content="A study timer you can't quit inside 50 meters of where you started.">
+  <meta name="description" content="A study timer you can't quit near where you started.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preload" href="fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/kalam-700-latin.woff2" as="font" type="font/woff2" crossorigin>
@@ -33,6 +33,19 @@ FORM: Blue book + grading rubric, first on the list; staging = cover / open page
   </svg>
 
   <p class="offline" id="offline" role="status" hidden>Lost touch with Anchor. Reconnecting… (is <code>npm start</code> still running?)</p>
+
+
+  <aside class="pair" id="pair" aria-label="Connect phones" hidden>
+    <p class="pair__caption" id="pair-caption">Scan to try Anchor</p>
+    <div class="pair__qr" id="pair-qr"></div>
+    <p class="pair__mono" id="pair-guest"></p>
+    <button class="btn btn--outline btn--small" type="button" id="pair-owner-btn" aria-expanded="false" hidden>Show my phone's QR (private)</button>
+    <div class="pair__owner" id="pair-owner" hidden>
+      <div class="pair__qr pair__qr--small" id="pair-owner-qr"></div>
+      <p class="pair__mono" id="pair-base"></p>
+      <p class="pair__mono" id="pair-key"></p>
+    </div>
+  </aside>
 
   <!-- ============ COVER: set up a session ============ -->
   <main class="cover" id="cover" aria-labelledby="cover-title" hidden>
@@ -52,6 +65,10 @@ FORM: Blue book + grading rubric, first on the list; staging = cover / open page
           <label class="blank blank--short">
             <span class="blank__label">Minutes</span>
             <input class="blank__input" name="studyMinutes" type="number" inputmode="numeric" min="1" max="240" step="1" value="25" required>
+          </label>
+          <label class="blank blank--short">
+            <span class="blank__label">Zone, meters</span>
+            <input class="blank__input" name="radiusM" type="number" inputmode="numeric" min="10" max="400" step="1" value="50" required>
           </label>
           <label class="blank blank--short">
             <span class="blank__label">College tuition / yr</span>
@@ -82,7 +99,7 @@ FORM: Blue book + grading rubric, first on the list; staging = cover / open page
         <section class="instructions" aria-labelledby="instructions-title">
           <h2 class="instructions__title" id="instructions-title">Instructions</h2>
           <ol class="instructions__list">
-            <li>Your anchor drops where you press start. Within 50 m of it, Stop is locked.</li>
+            <li>Your anchor drops where you press start. Inside your zone (50 m unless you change it), Stop is locked.</li>
             <li>Picked up your phone? Press <em>I'm on my phone</em>. Every 15 seconds on it, this Mac gets worse: red, ticking, blur, the whole screen shaking, then talking, a siren. In library mode it stays silent and steps every 20 seconds.</li>
             <li>Getting off clears everything instantly, but nothing resets: the phone timer pauses, and the next time you pick up your phone it resumes at the same step.</li>
             <li>Put down a deposit if you want, any amount. Hit 3:00 on your phone and it starts draining, a bigger bite every minute until it's gone. No deposit, no deposit step.</li>

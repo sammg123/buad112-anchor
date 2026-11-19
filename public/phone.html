@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Anchor">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#a9c7ec">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <title>Anchor</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="lib/leaflet/leaflet.css">
+  <link rel="stylesheet" href="phone.css">
+  <script src="lib/leaflet/leaflet.js" defer></script>
+  <script src="phone.js" type="module"></script>
+</head>
+<body data-view="loading">
+  <p class="offline" id="offline" role="status" hidden>Lost touch with Anchor. Reconnecting...</p>
+
+  <!-- SETUP -->
+  <main class="screen" id="setup" hidden>
+    <section class="map-hero spot" aria-label="Your study spot">
+      <div class="map-hero__map" id="spot-map"></div>
+      <div class="spot__pin" aria-hidden="true"><svg viewBox="0 0 40 52"><path d="M20 2C10 2 3 9.5 3 19c0 12 17 31 17 31s17-19 17-31C37 9.5 30 2 20 2z" fill="currentColor" stroke="#fcfbf7" stroke-width="2.5"/><circle cx="20" cy="19" r="7" fill="#fcfbf7"/></svg></div>
+      <p class="map-hero__tag" id="spot-tag">Drag the map to put the pin on your desk</p>
+      <p class="map-hero__chip" id="spot-acc">Finding you...</p>
+      <button class="spot__locate" type="button" id="spot-locate" aria-label="Back to my GPS location">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg>
+      </button>
+    </section>
+    <header class="masthead">
+      <h1 class="masthead__title">Anchor</h1>
+      <p class="masthead__sub">Study session book. Your phone gets graded.</p>
+    </header>
+    <form class="sheet" id="start-form" novalidate>
+      <label class="field"><span class="field__label">Course</span>
+        <input class="field__input" name="courseName" maxlength="40" autocomplete="off" value="BUAD 112"></label>
+      <label class="field"><span class="field__label">Minutes</span>
+        <input class="field__input" name="studyMinutes" type="number" inputmode="numeric" min="1" max="240" step="1" value="25"></label>
+      <label class="field"><span class="field__label">Zone size (meters)</span>
+        <input class="field__input" name="radiusM" type="number" inputmode="numeric" min="10" max="400" step="1" value="50"></label>
+      <label class="field"><span class="field__label">College tuition / yr (optional)</span>
+        <input class="field__input" name="tuitionPerYear" type="text" inputmode="numeric" autocomplete="off" placeholder="70,000"></label>
+      <label class="field"><span class="field__label">Deposit (optional, play money)</span>
+        <input class="field__input" name="deposit" type="text" inputmode="decimal" autocomplete="off" placeholder="0"></label>
+      <label class="toggle"><input type="checkbox" name="quiet" id="quiet">
+        <span><b>Library mode: no sound.</b> No alarm or voice, and silent mode and volume are left alone, so nobody around you gets distracted. Every other punishment stays.</span></label>
+      <p class="hint" id="a2hs" hidden>Tip: tap Share, then Add to Home Screen, so Anchor opens like an app.</p>
+      <button class="btn btn--ink" type="submit" id="start-btn">Drop anchor &amp; start</button>
+      <p class="error" id="start-error" role="alert"></p>
+    </form>
+
+    <details class="sheet install" id="install">
+      <summary class="install__title">Set up this iPhone (one time, about 3 min)</summary>
+      <ol class="install__steps">
+        <li>
+          <p>Tap each one, then <b>Add Shortcut</b>. When Anchor Config asks, paste these:</p>
+          <p class="install__copy"><span class="field__label">Base URL</span> <code id="copy-base"></code>
+            <button class="btn btn--small btn--paper" type="button" data-copy="copy-base">Copy</button></p>
+          <p class="install__copy"><span class="field__label">Key</span> <code id="copy-key"></code>
+            <button class="btn btn--small btn--paper" type="button" data-copy="copy-key">Copy</button></p>
+          <ul class="install__links" id="install-links"></ul>
+        </li>
+        <li>In Shortcuts, Automation tab, add four automations. Each one has <b>Run Immediately</b> on and a single action, <b>Run Shortcut</b>:
+          <ul class="install__autos">
+            <li>App <b>is Opened</b> (Instagram, TikTok, ...) → Anchor App Opened</li>
+            <li>App <b>is Closed</b> (same apps) → Anchor App Closed</li>
+            <li>App <b>is Opened</b> (Settings) → Anchor Guard</li>
+            <li><b>Leave</b> your study spot → Anchor Leave</li>
+          </ul>
+        </li>
+        <li>Settings, Accessibility, Color Filters: pick <b>Grayscale</b>, leave it off.</li>
+      </ol>
+      <label class="install__done"><input type="checkbox" id="installed"> Shortcuts are set up. Start the Enforcer when I drop the anchor.</label>
+    </details>
+  </main>
+
+  <!-- SESSION -->
+  <main class="screen" id="session" hidden>
+    <section class="map-hero" aria-label="Your no-phone zone">
+      <div class="map-hero__map zone-map" id="zone-map" role="img" aria-label="Map of your no-phone zone around the anchor"></div>
+      <p class="zone-status" id="zone-status" data-inside="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M3 3l18 18"/></svg>
+        <span><strong id="zone-status-title">No-phone zone</strong><small id="zone-status-sub">Phone use here is penalized</small></span>
+      </p>
+      <p class="map-hero__chip zone-map__key"><span class="zone-map__swatch zone-map__swatch--zone"></span>No-phone <span class="zone-map__swatch zone-map__swatch--unlock"></span>Stop unlocks <span class="zone-map__swatch zone-map__swatch--you"></span>You</p>
+    </section>
+    <header class="masthead masthead--small">
+      <p class="masthead__course" id="course-name">BUAD 112</p>
+      <p class="chip" id="deposit-chip" hidden>Deposit <strong id="deposit-left">$0</strong></p>
+    </header>
+    <section class="sheet">
+      <p class="label">Left to study</p>
+      <p class="big" id="study-time">25:00</p>
+      <p class="pen-line">On your phone <strong id="phone-time">0:00</strong> <span id="pickups"></span></p>
+      <div class="anchor-card" id="anchor-card" data-inside="true">
+        <p class="anchor-card__line">You are <strong class="anchor-card__dist"><span id="anchor-dist">–</span> m</strong> away from your anchor</p>
+        <div class="anchor-card__bar" aria-hidden="true"><span id="anchor-bar"></span></div>
+        <p class="anchor-card__note" id="anchor-note">Finding you...</p>
+        <p class="anchor-card__live"><span class="anchor-card__dot" aria-hidden="true"></span><span id="anchor-live">Live GPS</span></p>
+      </div>
+      <h2 class="label">Phone rubric</h2>
+      <ol class="rubric" id="rubric"></ol>
+      <button class="btn btn--outline" type="button" id="stop-btn">Stop studying</button>
+      <p class="hint" id="stop-why"></p>
+      <button class="btn btn--pen" type="button" id="enforcer-btn">Start the Enforcer</button>
+      <p class="hint">Runs the Anchor Enforcer shortcut, which re-applies the punishments every 15 s while you're at your anchor.</p>
+      <p class="error" id="session-error" role="alert"></p>
+    </section>
+
+    <details class="presenter">
+      <summary>Presenter</summary>
+      <div class="presenter__body">
+        <label class="field"><span class="field__label">Demo speed <output id="speed-out">1x</output></span>
+          <input type="range" id="speed-range" min="1" max="10" step="0.5" value="1"></label>
+        <label class="field"><span class="field__label">Simulated distance <output id="sim-out">real GPS</output></span>
+          <input type="range" id="sim-range" min="0" max="200" step="1" value="0"></label>
+        <button class="btn btn--outline btn--small" type="button" id="sim-reset">Use real GPS</button>
+        <button class="btn btn--pen" type="button" id="open-btn">Simulate opening Instagram</button>
+        <button class="btn btn--pen" type="button" id="guard-btn">Simulate opening Settings</button>
+        <button class="btn btn--outline btn--small" type="button" id="close-btn">I closed the app</button>
+        <button class="btn btn--outline btn--small" type="button" id="sound-btn">Test sound</button>
+        <p class="hint" id="sound-status" role="status"></p>
+      </div>
+    </details>
+  </main>
+
+  <!-- DONE -->
+  <main class="screen" id="done" hidden>
+    <header class="masthead"><h1 class="masthead__title">Anchor</h1><p class="masthead__sub">Session handed back.</p></header>
+    <section class="sheet">
+      <div class="grade"><p class="grade__label">Grade</p><p class="grade__mark" id="grade">A</p><p><span id="score">100</span>% focused</p></div>
+      <dl class="filled" id="filled"></dl>
+      <button class="btn btn--ink" type="button" id="again-btn">New session</button>
+      <p class="error" id="done-error" role="alert"></p>
+    </section>
+  </main>
+
+  <!-- GATE -->
+  <main class="gate" id="gate" hidden>
+    <div class="gate__inner">
+      <p class="gate__kicker">You're at your anchor.</p>
+      <p class="gate__count" id="gate-count">10</p>
+      <p class="gate__line" id="gate-line">Wait. Then decide if you really need this app.</p>
+      <p class="gate__cost" id="gate-cost" hidden>Tuition burned: <strong id="gate-cost-amt">$0.00</strong></p>
+      <p class="gate__fx" id="gate-fx" hidden></p>
+      <form class="gate__confess" id="gate-form" hidden>
+        <p class="gate__phrase" id="gate-phrase"></p>
+        <input class="gate__input" id="gate-input" autocomplete="off" autocapitalize="off" aria-label="Type the sentence">
+      </form>
+      <button class="btn btn--paper" type="button" id="gate-btn" disabled>Continue</button>
+      <p class="gate__ok" id="gate-ok" hidden></p>
+      <p class="error error--gate" id="gate-error" role="alert"></p>
+      <button class="gate__back" type="button" id="gate-back">Back to Anchor</button>
+    </div>
+  </main>
+
+  <!-- LOCKED -->
+  <main class="gate" id="locked" hidden>
+    <div class="gate__inner">
+      <p class="gate__kicker">Settings are locked until you leave your anchor.</p>
+      <p class="gate__count" id="locked-dist">50 m</p>
+      <p class="gate__line">to go.</p>
+      <button class="gate__back" type="button" id="locked-back">Back to Anchor</button>
+    </div>
+  </main>
+
+  <div class="dim" id="dim" aria-hidden="true"></div>
+  <div class="gray" id="gray" aria-hidden="true"></div>
+  <div class="flash" id="flash" aria-hidden="true"></div>
+  <div class="drop" id="drop" hidden role="status">
+    <div class="drop__stage" aria-hidden="true">
+      <span class="drop__ring"></span><span class="drop__ring"></span><span class="drop__ring"></span>
+      <svg class="drop__anchor" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="32" cy="10" r="5"/><path d="M32 15v42M21 25h22M12 38c2 11 10 18 20 19 10-1 18-8 20-19M7 43l5-6 6 5M57 43l-5-6-6 5"/>
+      </svg>
+    </div>
+    <p class="drop__title">Anchor dropped</p>
+    <p class="drop__sub" id="drop-sub">Right here.</p>
+  </div>
+  <div class="cant" id="cant" hidden role="dialog" aria-modal="true" aria-labelledby="cant-title">
+    <div class="cant__panel">
+      <span class="cant__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M3 3l18 18"/></svg></span>
+      <h2 class="cant__title" id="cant-title">You can't stop here</h2>
+      <p class="cant__body" id="cant-body">You're inside the no-phone zone.</p>
+      <button class="btn btn--ink" type="button" id="cant-ok">Got it</button>
+    </div>
+  </div>
+</body>
+</html>
