@@ -42,9 +42,13 @@ enum AnchorRules {
     static let settleImprovementMeters = 2.0
     static let settleMinRangeMeters = 10.0
 
+    /// Steps beyond this mean you're walking, not sitting down: no settling then.
+    static let settleMaxWalkMeters = 3.0
+
     static func shouldSettle(anchorAccuracy: Double, estimateAccuracy: Double, metersFromAnchor: Double,
-                             sessionAge: TimeInterval) -> Bool {
+                             sessionAge: TimeInterval, walkedMeters: Double) -> Bool {
         sessionAge <= settleSeconds
+            && walkedMeters <= settleMaxWalkMeters
             && estimateAccuracy + settleImprovementMeters < anchorAccuracy
             && metersFromAnchor <= max(settleMinRangeMeters, anchorAccuracy)
     }

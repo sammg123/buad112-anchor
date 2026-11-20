@@ -17,6 +17,11 @@ final class ZoneTracker {
     private(set) var extraZone: Zone?
     /// Walking from the motion chip, for the second key on your own anchor.
     private(set) var walk = WalkEvidence()
+    /// Set once you've walked far enough out; holds (past the 3-minute walk window) until GPS has you inside.
+    private var walkedOutLatch = false
+    /// When GPS first had you past your anchor's line by the full margin, this time out.
+    private var strictlyOutsideSince: Date?
+
     /// Whether the motion chip is feeding `walk`. Without it, your anchor falls back to GPS alone with the
     /// stricter whole-circle rule.
     var usesWalkKey = false
@@ -87,6 +92,12 @@ final class ZoneTracker {
             let fit = self.fit(estimate, margin: margin, in: zone)
             return (zone.id, (buildings[zone.id] ?? .unknown).updated(with: fit, at: now))
         })
+        if let zone = extraZone, zone.isDroppedAnchor {
+            let strictlyOut = ZoneGeometry.fit(center: estimate.point, radius: margin, in: zone.polygon) == .fullyOutside
+            strictlyOutsideSince = strictlyOut ? (strictlyOutsideSince ?? now) : nil
+            // Back inside: the walking key has to be earned again next time.
+            if buildings[zone.id]?.state == .inside { walkedOutLatch = false }
+        }
         return verdict
     }
 
@@ -111,7 +122,8 @@ final class ZoneTracker {
     func lock(for zone: Zone, at now: Date) -> ZoneLock {
         if zone.isDroppedAnchor {
             return AnchorExit.lock(building: building(zone.id, at: now),
-                                   walkedOut: usesWalkKey ? hasWalkedOut(of: zone, at: now) : nil)
+                                   walkedOut: usesWalkKey ? hasWalkedOut(of: zone, at: now) : nil,
+                                   strictlyOutsideFor: strictlyOutsideSince.map { now.timeIntervalSince($0) })
         }
         return ZoneRules.lock(zone: zone, building: building(zone.id, at: now), areaID: areas.current(in: zone.id, at: now),
                        rangingLive: areas.isRangingLive(at: now))
@@ -161,15 +173,27 @@ final class ZoneTracker {
 
     func walked(_ segment: WalkSegment) {
         walk = walk.adding(segment)
+        if let zone = extraZone, zone.isDroppedAnchor,
+           walk.netMeters(at: segment.time) >= AnchorExit.requiredWalkMeters(radius: zone.enclosingCircle.radius) {
+            walkedOutLatch = true
+        }
     }
 
     func resetWalk() {
         walk = WalkEvidence()
+        walkedOutLatch = false
+        strictlyOutsideSince = nil
     }
 
     /// Whether you've walked far enough out of your anchor's circle for the walking key.
     func hasWalkedOut(of zone: Zone, at now: Date) -> Bool {
-        walk.netMeters(at: now) >= AnchorExit.requiredWalkMeters(radius: zone.enclosingCircle.radius)
+        walkedOutLatch || walk.netMeters(at: now) >= AnchorExit.requiredWalkMeters(radius: zone.enclosingCircle.radius)
+    }
+
+    /// A dropped anchor moved onto a sharper reading: same spot in the tracker's eyes, so in/out progress stays.
+    func moveExtraZone(to zone: Zone) {
+        guard let old = extraZone, old.id == zone.id else { return setExtraZone(zone) }
+        extraZone = zone
     }
 
     /// Sharp enough to drop an anchor on: a fresh position from readings within 15 m.

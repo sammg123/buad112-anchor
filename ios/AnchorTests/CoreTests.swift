@@ -847,11 +847,11 @@ struct DroppedAnchorTests {
 
     @Test("the anchor settles onto sharper readings for its first minute, while you're still at it")
     func settles() {
-        #expect(AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 8, sessionAge: 20))
-        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 8, sessionAge: 61))
-        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 6, estimateAccuracy: 6, metersFromAnchor: 2, sessionAge: 20))
+        #expect(AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 8, sessionAge: 20, walkedMeters: 0))
+        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 8, sessionAge: 61, walkedMeters: 0))
+        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 6, estimateAccuracy: 6, metersFromAnchor: 2, sessionAge: 20, walkedMeters: 0))
         // Walking away isn't settling.
-        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 25, sessionAge: 20))
+        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 25, sessionAge: 20, walkedMeters: 0))
     }
 
     @MainActor
@@ -1151,5 +1151,47 @@ struct TwoKeyExitTests {
         #expect(AnchorExit.lock(building: .unknown, walkedOut: true) == .undecided)
         // No motion data (permission off): GPS alone decides, with the stricter whole-circle rule upstream.
         #expect(AnchorExit.lock(building: .outside, walkedOut: nil) == .free)
+    }
+}
+
+// MARK: - Two-key review fixes
+
+@Suite("Two-key review fixes")
+struct TwoKeyReviewTests {
+    @Test("well past the line on GPS for 90 s frees you even with no steps (a dead step counter can't trap you)")
+    func escape() {
+        #expect(AnchorExit.lock(building: .outside, walkedOut: false, strictlyOutsideFor: 89) == .locked(areaID: nil))
+        #expect(AnchorExit.lock(building: .outside, walkedOut: false, strictlyOutsideFor: 90) == .free)
+        #expect(AnchorExit.lock(building: .outside, walkedOut: false, strictlyOutsideFor: nil) == .locked(areaID: nil))
+    }
+
+    @MainActor
+    @Test("once you've walked out it sticks, even after the 3-minute walk window, until GPS has you back inside")
+    func latch() {
+        let tracker = ZoneTracker(zones: [])
+        tracker.usesWalkKey = true
+        let spot = Zone.droppedAnchor(center: campus, radius: 25)
+        tracker.setExtraZone(spot)
+        tracker.walked(WalkSegment(time: t0, meters: 30, heading: .pi / 2))
+        #expect(tracker.hasWalkedOut(of: spot, at: t0.addingTimeInterval(1)))
+        #expect(tracker.hasWalkedOut(of: spot, at: t0.addingTimeInterval(400)))
+        // Back inside on GPS: the latch lets go.
+        for s in 0..<3 {
+            let time = t0.addingTimeInterval(400 + Double(s))
+            tracker.received(LocationReading(point: campus, accuracy: 5, time: time, isSpoofed: false), at: time)
+        }
+        #expect(!tracker.hasWalkedOut(of: spot, at: t0.addingTimeInterval(403)))
+    }
+
+    @Test("the anchor doesn't settle while you're walking")
+    func noSettleWhileWalking() {
+        #expect(AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 8, sessionAge: 20, walkedMeters: 1))
+        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 8, sessionAge: 20, walkedMeters: 4))
+    }
+
+    @Test("a bunched-up step report is capped at walking speed")
+    func clamp() {
+        #expect(MotionTracker.plausibleMeters(40, overSeconds: 5) == 15)
+        #expect(MotionTracker.plausibleMeters(6, overSeconds: 5) == 6)
     }
 }

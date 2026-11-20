@@ -25,6 +25,8 @@ struct StartView: View {
     /// Corners of the selected area while you drag them; nil when not editing.
     @State private var editingPoints: [GeoPoint]?
     @State private var draggingCorner: Int?
+    /// Where on the corner your finger grabbed it, so the corner doesn't jump under your fingertip.
+    @State private var grabOffset: CGSize?
     @State private var isConfirmingDelete = false
     /// Where the current touch on the map began, for picking an area by holding it.
     @State private var touchDown: CGPoint?
@@ -157,7 +159,7 @@ struct StartView: View {
             // Holding on one of your areas picks it too: remember where the finger went down, and pick there once
             // the hold completes.
             .simultaneousGesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                .onChanged { touch in if touchDown == nil { touchDown = touch.startLocation } }
+                .onChanged { touch in touchDown = touch.startLocation }
                 .onEnded { _ in touchDown = nil },
                 including: drawing == nil && editingPoints == nil ? .all : .subviews)
             .simultaneousGesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in
@@ -180,7 +182,10 @@ struct StartView: View {
                     CornerHandle(number: index + 1, isDragging: draggingCorner == index)
                         .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
                             .onChanged { drag in moveCorner(index, to: drag.location, proxy: proxy) }
-                            .onEnded { _ in draggingCorner = nil })
+                            .onEnded { _ in
+                                draggingCorner = nil
+                                grabOffset = nil
+                            })
                 }
             }
         } else if let area = selectedArea {
@@ -331,8 +336,13 @@ struct StartView: View {
     }
 
     private func moveCorner(_ index: Int, to location: CGPoint, proxy: MapProxy) {
-        guard let points = editingPoints, points.indices.contains(index),
-              let coordinate = proxy.convert(location, from: .global) else { return }
+        guard let points = editingPoints, points.indices.contains(index) else { return }
+        if draggingCorner != index || grabOffset == nil,
+           let corner = proxy.convert(points[index].coordinate, to: .global) {
+            grabOffset = CGSize(width: location.x - corner.x, height: location.y - corner.y)
+        }
+        let target = CGPoint(x: location.x - (grabOffset?.width ?? 0), y: location.y - (grabOffset?.height ?? 0))
+        guard let coordinate = proxy.convert(target, from: .global) else { return }
         draggingCorner = index
         let moved = GeoPoint(lat: coordinate.latitude, lng: coordinate.longitude)
         editingPoints = points.enumerated().map { $0.offset == index ? moved : $0.element }

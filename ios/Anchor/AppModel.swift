@@ -271,6 +271,8 @@ final class AppModel {
         locationStatus = location.status
         isPrecise = location.isPrecise
         motionAllowed = MotionTracker.isAuthorized
+        // Motion & Fitness turned off mid-session: fall back to GPS alone rather than wait for steps forever.
+        updateMotion()
         hasPasscode = LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
         notificationsAllowed = await buzzer.isAuthorized()
         if locationStatus == .authorizedWhenInUse, !Self.skipsAlwaysPrompt { location.requestAlways() }
@@ -569,9 +571,10 @@ final class AppModel {
               let here = tracker.freshEstimate(at: now),
               AnchorRules.shouldSettle(anchorAccuracy: current.anchorAccuracy, estimateAccuracy: here.accuracy,
                                        metersFromAnchor: Geo.distanceMeters(current.anchor, here.point),
-                                       sessionAge: now.timeIntervalSince(current.startedAt)) else { return }
+                                       sessionAge: now.timeIntervalSince(current.startedAt),
+                                       walkedMeters: tracker.walk.netMeters(at: now)) else { return }
         let settled = current.reanchored(to: Zone.droppedAnchor(center: here.point, radius: radius), accuracy: here.accuracy)
-        tracker.setExtraZone(settled.area)
+        tracker.moveExtraZone(to: settled.area)
         session = settled
         store.saveRunning(settled)
     }

@@ -17,8 +17,17 @@ final class MotionTracker {
     private var lastDistance = 0.0
     private var headings: [Double] = []
     private var lastHeading = 0.0
+    private var lastReport: Date?
+    /// Faster than a run is a bunched-up report (locked screen), not walking.
+    nonisolated static let maxMetersPerSecond = 3.0
 
-    static var isAvailable: Bool { CMPedometer.isDistanceAvailable() && CMMotionManager().isDeviceMotionAvailable }
+    private static let probe = CMMotionManager()
+    static var isAvailable: Bool { CMPedometer.isDistanceAvailable() && probe.isDeviceMotionAvailable }
+
+    /// A report's distance, capped at what's possible in the time since the last one.
+    nonisolated static func plausibleMeters(_ meters: Double, overSeconds seconds: Double) -> Double {
+        min(meters, maxMetersPerSecond * max(seconds, 1))
+    }
     static var isAuthorized: Bool { CMPedometer.authorizationStatus() == .authorized }
     static var isDenied: Bool {
         let status = CMPedometer.authorizationStatus()
@@ -41,10 +50,13 @@ final class MotionTracker {
         isRunning = true
         lastDistance = 0
         headings = []
+        lastReport = Date()
         motion.deviceMotionUpdateInterval = 0.1
-        motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { @Sendable [weak self] data, _ in
-            guard let yaw = data?.attitude.yaw else { return }
-            MainActor.assumeIsolated { self?.turned(to: yaw) }
+        // iOS's own heading (compass-backed) stays sound with the phone upright in a pocket, where the plain yaw
+        // angle breaks down. Only turns matter, so a constant offset is fine.
+        motion.startDeviceMotionUpdates(using: .xMagneticNorthZVertical, to: .main) { @Sendable [weak self] data, _ in
+            guard let degrees = data?.heading, degrees >= 0 else { return }
+            MainActor.assumeIsolated { self?.turned(to: degrees * .pi / 180) }
         }
         pedometer.startUpdates(from: Date()) { @Sendable [weak self] data, error in
             if let error { Self.log.error("pedometer: \(error.localizedDescription, privacy: .public)") }
@@ -66,13 +78,15 @@ final class MotionTracker {
 
     /// New steps since the last report, along the average way the phone faced meanwhile.
     private func counted(totalMeters: Double) {
-        let meters = totalMeters - lastDistance
+        let now = Date()
+        let meters = Self.plausibleMeters(totalMeters - lastDistance, overSeconds: now.timeIntervalSince(lastReport ?? now))
         lastDistance = totalMeters
+        lastReport = now
         guard meters > 0 else { return }
         if !headings.isEmpty {
             lastHeading = atan2(headings.reduce(0) { $0 + sin($1) }, headings.reduce(0) { $0 + cos($1) })
         }
         headings = []
-        onSegment?(WalkSegment(time: Date(), meters: meters, heading: lastHeading))
+        onSegment?(WalkSegment(time: now, meters: meters, heading: lastHeading))
     }
 }

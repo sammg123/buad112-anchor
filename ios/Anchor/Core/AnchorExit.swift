@@ -39,6 +39,9 @@ struct WalkEvidence: Equatable, Sendable {
 /// GPS drifting while you sit has no steps; shaking the phone has steps but doesn't move GPS. Cheating takes both.
 enum AnchorExit {
     static let walkShareOfRadius = 0.6
+    /// GPS well past the line (by the full margin) this long frees you even without steps, so a step counter that
+    /// stops reporting can't trap anyone. Sitting-still drift that large and that steady is very unlikely.
+    static let gpsOnlyEscapeSeconds = 90.0
     static let minWalkMeters = 10.0
 
     static func requiredWalkMeters(radius: Double) -> Double {
@@ -52,11 +55,14 @@ enum AnchorExit {
     }
 
     /// `walkedOut` is nil without motion data: then GPS alone decides (with the stricter whole-circle rule).
-    static func lock(building: BuildingPresence.State, walkedOut: Bool?) -> ZoneLock {
+    /// `strictlyOutsideFor`: how long GPS has had you past the line by the full margin, if it does.
+    static func lock(building: BuildingPresence.State, walkedOut: Bool?, strictlyOutsideFor: TimeInterval? = nil) -> ZoneLock {
         switch building {
         case .inside: return .locked(areaID: nil)
         case .unknown: return .undecided
-        case .outside: return walkedOut == false ? .locked(areaID: nil) : .free
+        case .outside:
+            if walkedOut != false { return .free }
+            return (strictlyOutsideFor ?? 0) >= gpsOnlyEscapeSeconds ? .free : .locked(areaID: nil)
         }
     }
 }
