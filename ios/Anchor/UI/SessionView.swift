@@ -216,6 +216,7 @@ private struct ZoneCard: View {
         if out { return "The timer is paused. Walk back in to keep going." }
         if session.isDroppedAnchor {
             guard let meters = model.metersToUnlock else { return "Waiting for GPS…" }
+            if meters < 1 { return "You look out. Checking for a few seconds…" }
             return "About \(Int(meters.rounded(.up))) m more to walk before Stop unlocks."
         }
         let zone = session.area

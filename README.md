@@ -109,7 +109,10 @@ to show the graded cover.
 
 A native version for the phone itself, shipped through TestFlight.
 
-- **No-phone zones** (`ios/Anchor/Resources/Zones.json`), Lime-style: each zone is a building outline (flat;
+- **Drop anchor here** is the main way to study, anywhere: your lock radius (25-200 m) around where you stand,
+  widened by that GPS reading's accuracy (anchors need a reading within 65 m and 10 s). Leaving uses the same GPS
+  rules as zones below.
+- **No-phone zones** are extra (`ios/Anchor/Resources/Zones.json`), Lime-style: each zone is a building outline (flat;
   floors don't count) plus its study areas, each found by a Bluetooth beacon. In the building near a study-area
   beacon locks the phone; the lobby, the café and outside are free; a zone with no study areas is the whole
   building. Leavey Library ships first (outline from OpenStreetMap, ODbL); its study areas and beacon ids are

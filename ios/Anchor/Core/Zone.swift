@@ -69,10 +69,10 @@ struct Zone: Codable, Equatable, Sendable, Identifiable {
     /// A spot from "Drop anchor here", not a zone from the zones file.
     var isDroppedAnchor: Bool { id == Self.droppedAnchorID }
 
-    /// "Drop anchor here": your radius around where you stand, widened by how rough that reading was (at most
-    /// 50 m), so a poor anchor can't put the edge right under you.
+    /// "Drop anchor here": your radius around where you stand, widened by that reading's full accuracy, so a
+    /// rough anchor can't put the edge right under you.
     static func droppedAnchor(center: GeoPoint, radius: Double, anchorAccuracy: Double) -> Zone {
-        let margin = min(max(anchorAccuracy, 0), AnchorRules.maxAnchorMarginMeters)
+        let margin = min(max(anchorAccuracy, 0), AnchorRules.maxAnchorAccuracyMeters)
         return circle(center: center, radius: radius + margin)
     }
 

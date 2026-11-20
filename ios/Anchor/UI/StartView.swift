@@ -36,7 +36,7 @@ struct StartView: View {
             ZoneLayers(zones: model.tracker.zones, accuracy: model.tracker.accuracyCircle)
             if model.startable == nil, let here = model.fix?.coordinate {
                 // The circle "Drop anchor here" would lock.
-                MapCircle(center: here, radius: AnchorRules.clampedRadius(model.radiusMeters))
+                MapCircle(center: here, radius: AnchorRules.clampedRadius(model.radiusMeters) + model.anchorMargin)
                     .foregroundStyle(Palette.blue.opacity(0.12))
                     .stroke(Palette.blue.opacity(0.6), lineWidth: 2)
             }
@@ -69,7 +69,7 @@ struct StartView: View {
             }
             MinutePicker(minutes: minutes)
             if model.startable == nil {
-                RadiusSlider(radius: radius)
+                RadiusSlider(radius: radius, margin: model.anchorMargin)
             }
             GraceStepper()
             LibraryToggle()
@@ -84,7 +84,7 @@ struct StartView: View {
                         Label { Text("Start in \(here.area?.name ?? here.zone.name)") } icon: { AnchorMark(size: 22) }
                     }
                     .buttonStyle(ProminentButtonStyle(color: Palette.red))
-                    Button("Drop my own anchor instead", action: model.dropAnchor)
+                    Button("Drop my own anchor instead (\(Int(AnchorRules.clampedRadius(model.radiusMeters))) m)", action: model.dropAnchor)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Palette.blue)
                         .frame(minHeight: 44)
@@ -182,6 +182,8 @@ private struct MinutePicker: View {
 
 private struct RadiusSlider: View {
     @Binding var radius: Double
+    /// GPS accuracy right now: the circle you'd get is this much wider.
+    let margin: Double
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -197,7 +199,9 @@ private struct RadiusSlider: View {
                 .tint(Palette.blue)
                 .accessibilityLabel("Lock radius")
                 .accessibilityValue("\(Int(radius)) meters")
-            Text("Stop stays locked until you walk out of the circle.")
+            Text(margin >= 1
+                 ? "Stop stays locked until you walk out of the circle. GPS adds \(Int(margin.rounded(.up))) m here."
+                 : "Stop stays locked until you walk out of the circle.")
                 .font(.footnote)
                 .foregroundStyle(Palette.secondary)
         }

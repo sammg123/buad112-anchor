@@ -31,6 +31,8 @@ final class AppModel {
     private static let arrivalCooldownSeconds = 30.0 * 60
     /// A start from a notification gives up if being in the zone can't be confirmed this soon.
     private static let confirmZoneSeconds = 20.0
+    /// "Drop anchor here" gives up if no usable reading comes this soon.
+    private static let findSpotSeconds = 45.0
     /// The test host app must not open the location monitor (it can only be opened once per process).
     private static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
@@ -183,14 +185,21 @@ final class AppModel {
 
     /// Roughly how much farther to walk before Stop unlocks: out past the edge by the GPS accuracy (the whole
     /// accuracy circle has to be outside).
+    /// How much wider than your radius the circle would be if you dropped an anchor now (the reading's accuracy).
+    var anchorMargin: Double {
+        guard let fix, fix.horizontalAccuracy >= 0 else { return 0 }
+        return min(fix.horizontalAccuracy, AnchorRules.maxAnchorAccuracyMeters)
+    }
+
+    /// Zero means you're out and Anchor is confirming it; nil means no recent position.
     var metersToUnlock: Double? {
-        guard let session, let depth = tracker.depth(in: session.area) else { return nil }
-        return max(1, depth + (tracker.lastUsed?.accuracy ?? 0))
+        guard let session, let depth = tracker.depth(in: session.area, at: now) else { return nil }
+        return max(0, depth + (tracker.lastUsed?.accuracy ?? 0))
     }
 
     /// Meters to the nearest way out of a building (its edge), while you're inside one; nil otherwise.
     func metersToEdge(of zone: Zone) -> Double? {
-        tracker.depth(in: zone).flatMap { $0 > 0 ? $0 : nil }
+        tracker.depth(in: zone, at: now).flatMap { $0 > 0 ? $0 : nil }
     }
 
     /// The session as of this second, for display.
@@ -237,6 +246,7 @@ final class AppModel {
     /// you're confirmed in the zone, so an old notification tapped at home can't lock anything.
     func startZoneSession(_ zoneID: String) {
         guard session == nil, let zone = tracker.zones.first(where: { $0.id == zoneID }) else { return }
+        isDroppingAnchor = false
         guard isReadyToStart else {
             notice = "Anchor needs Location with Precise Location on. Turn them on in Settings › Anchor › Location."
             return
@@ -286,7 +296,20 @@ final class AppModel {
             isDroppingAnchor = true
             isFindingSpot = true
             location.refresh()
+            let attempt = UUID()
+            pendingAttempt = attempt
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.findSpotSeconds))
+                self?.giveDropUp(attempt: attempt)
+            }
         }
+    }
+
+    /// No usable reading in time (deep indoors, say): stop waiting rather than start somewhere stale later.
+    private func giveDropUp(attempt: UUID) {
+        guard isDroppingAnchor, pendingAttempt == attempt, session == nil else { return }
+        cancelFindingSpot()
+        notice = "Couldn't get a sharp enough GPS reading here. Try near a window, or step outside and drop it there."
     }
 
     private func isUsableAnchor(_ fix: CLLocation) -> Bool {
@@ -445,7 +468,8 @@ final class AppModel {
     /// 30 minutes per zone (counting from the last session there too). On screen without Auto-start, the start
     /// screen already offers it.
     private func checkArrival() {
-        guard session == nil, pendingZoneID == nil, let here = startable, autoStart || !isAppActive else { return }
+        guard session == nil, pendingZoneID == nil, !isDroppingAnchor, let here = startable,
+              autoStart || !isAppActive else { return }
         let key = here.zone.id
         if let last = store.lastArrival(atZone: key), now.timeIntervalSince(last) < Self.arrivalCooldownSeconds { return }
         store.saveArrival(atZone: key, at: now)

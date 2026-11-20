@@ -768,22 +768,24 @@ struct DroppedAnchorTests {
         #expect(AnchorRules.clampedRadius(900) == 200)
     }
 
-    @Test("an anchor needs a reading within 100 m and 30 s")
+    @Test("an anchor needs a reading within 65 m and 10 s")
     func usableAnchor() {
         #expect(AnchorRules.isUsableAnchor(accuracy: 30, age: 5))
-        #expect(!AnchorRules.isUsableAnchor(accuracy: 30, age: 31))
-        #expect(!AnchorRules.isUsableAnchor(accuracy: 150, age: 1))
+        #expect(AnchorRules.isUsableAnchor(accuracy: 65, age: 10))
+        #expect(!AnchorRules.isUsableAnchor(accuracy: 30, age: 11))
+        #expect(!AnchorRules.isUsableAnchor(accuracy: 66, age: 1))
         #expect(!AnchorRules.isUsableAnchor(accuracy: -1, age: 1))
     }
 
-    @Test("the spot is a circle of your radius plus how rough the anchor reading was, at most 50 m extra")
+    @Test("the spot is your radius plus the anchor reading's full accuracy, so a rough anchor never misplaces the edge")
     func circle() {
         let spot = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 10)
         #expect(spot.isDroppedAnchor)
         #expect(spot.usesWholeBuilding)
         #expect(abs(spot.depth(of: campus) - 35) < 0.5)
-        let rough = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 400)
-        #expect(abs(rough.depth(of: campus) - 75) < 0.5)
+        // Every anchor that can be accepted is covered in full.
+        let roughest = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: AnchorRules.maxAnchorAccuracyMeters)
+        #expect(abs(roughest.depth(of: campus) - (25 + AnchorRules.maxAnchorAccuracyMeters)) < 0.5)
     }
 
     @Test("a dropped-anchor session keeps its circle and radius, and the Lock Screen shows no place name")
@@ -802,6 +804,17 @@ struct DroppedAnchorTests {
         let spot = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 0)
         #expect(ZoneGeometry.fit(center: offset(campus, 30, 0), radius: 10, in: spot.polygon) == .straddling)
         #expect(ZoneGeometry.fit(center: offset(campus, 36, 0), radius: 10, in: spot.polygon) == .fullyOutside)
+    }
+
+    @MainActor
+    @Test("starting in a real zone keeps what's known about that building")
+    func zoneKeepsPresence() {
+        let tracker = ZoneTracker(zones: [hall])
+        tracker.received(LocationReading(point: campus, accuracy: 5, time: t0, isSpoofed: false), at: t0)
+        #expect(tracker.building("hall", at: t0) == .inside)
+        tracker.setExtraZone(hall)
+        #expect(tracker.building("hall", at: t0) == .inside)
+        #expect(tracker.extraZone == nil)
     }
 
     @MainActor

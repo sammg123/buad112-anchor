@@ -25,10 +25,19 @@ final class ZoneTracker {
     /// Tracks a dropped anchor's circle (or nothing). A new spot starts fresh: whatever was known about the last
     /// one is forgotten.
     func setExtraZone(_ zone: Zone?) {
-        if let old = extraZone { buildings = buildings.filter { $0.key != old.id } }
-        if let zone { buildings = buildings.filter { $0.key != zone.id } }
-        extraZone = zone.flatMap { extra in zones.contains { $0.id == extra.id } ? nil : extra }
+        let next = zone.flatMap { extra in zones.contains { $0.id == extra.id } ? nil : extra }
+        // Only places outside the zones file start fresh; a real zone keeps what's known about its building.
+        let stale = Set([extraZone?.id, next?.id].compactMap { $0 })
+        buildings = buildings.filter { !stale.contains($0.key) }
+        extraZone = next
     }
+
+    /// The cleaned-up position, only if it's from the last 10 s.
+    func freshEstimate(at now: Date) -> LocationEstimate? {
+        estimate.flatMap { now.timeIntervalSince($0.time) <= Self.freshSeconds ? $0 : nil }
+    }
+
+    private static let freshSeconds = 10.0
 
     /// Everything checked: the zones file plus a legacy session's circle.
     var allZones: [Zone] {
@@ -94,9 +103,10 @@ final class ZoneTracker {
                         areaIn: { self.areas.current(in: $0, at: now) })
     }
 
-    /// Meters from the cleaned-up position to the zone's edge: positive inside, negative outside.
-    func depth(in zone: Zone) -> Double? {
-        estimate.map { zone.depth(of: $0.point) }
+    /// Meters from the cleaned-up position to the zone's edge: positive inside, negative outside. Nil without a
+    /// position from the last 10 s.
+    func depth(in zone: Zone, at now: Date) -> Double? {
+        freshEstimate(at: now).map { zone.depth(of: $0.point) }
     }
 
     /// The circle to draw around you: the cleaned-up position, as uncertain as the worse of it and the last reading.

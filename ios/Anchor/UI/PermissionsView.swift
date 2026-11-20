@@ -14,17 +14,17 @@ struct PermissionsView: View {
                     .frame(width: 64, height: 64)
                     .overlay(AnchorMark(size: 34))
                     .shadow(color: Palette.blue.opacity(0.3), radius: 12, y: 8)
-                Text("No-phone zones.\nLeave to quit.")
+                Text("Study where you sit.\nLeave to quit.")
                     .font(.system(size: 34, weight: .bold))
                     .tracking(-0.8)
                     .accessibilityAddTraits(.isHeader)
-                Text("In a study area, picking up your phone is miserable. Walk out and it lets you go.")
+                Text("Drop an anchor where you study, or walk into a library study area. Pick up your phone there and Anchor makes it miserable. Walk away and it lets you go.")
                     .font(.body)
                     .foregroundStyle(Palette.secondary)
             }
             VStack(spacing: 12) {
                 PermissionRow(symbol: "location.fill", tint: Palette.blue, title: "Location", tag: "REQUIRED",
-                              detail: "To know when you're in a no-phone zone. Choose Always so Anchor notices even when it's closed, and keep Precise Location on.",
+                              detail: "To know when you leave your spot or a no-phone zone. Choose Always, and keep Precise Location on.",
                               done: model.hasLocation)
                 PermissionRow(symbol: "bell.fill", tint: Palette.red, title: "Notifications", tag: "RECOMMENDED",
                               detail: "The annoying part. Without them Anchor can't buzz you while you scroll.",
