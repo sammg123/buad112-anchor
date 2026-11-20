@@ -829,3 +829,30 @@ struct DroppedAnchorTests {
         #expect(tracker.buildings[first.id] == nil)
     }
 }
+
+// MARK: - Map zoom
+
+@Suite("Map zoom")
+struct MapZoomTests {
+    @Test("each tap halves or doubles what the map shows")
+    func steps() {
+        #expect(MapZoom.span(400, zoomingIn: true) == 200)
+        #expect(MapZoom.span(400, zoomingIn: false) == 800)
+    }
+
+    @Test("zoom stops at about a room's width and a city's")
+    func limits() {
+        #expect(MapZoom.span(70, zoomingIn: true) == MapZoom.minSpanMeters)
+        #expect(MapZoom.span(30_000, zoomingIn: false) == MapZoom.maxSpanMeters)
+        #expect(!MapZoom.canZoom(span: MapZoom.minSpanMeters, zoomingIn: true))
+        #expect(MapZoom.canZoom(span: MapZoom.minSpanMeters, zoomingIn: false))
+        #expect(!MapZoom.canZoom(span: MapZoom.maxSpanMeters, zoomingIn: false))
+    }
+
+    @Test("while following you, a zoom is kept as a scale on the framing, within the same limits")
+    func followScale() {
+        #expect(MapZoom.scale(1, base: 400, zoomingIn: true) == 0.5)
+        #expect(MapZoom.scale(1, base: 400, zoomingIn: false) == 2)
+        #expect(MapZoom.scale(0.25, base: 400, zoomingIn: true) == MapZoom.minSpanMeters / 400)
+    }
+}

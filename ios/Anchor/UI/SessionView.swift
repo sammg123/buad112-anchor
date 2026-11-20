@@ -5,6 +5,10 @@ import SwiftUI
 struct SessionView: View {
     @Environment(AppModel.self) private var model
     @State private var camera: MapCameraPosition = .automatic
+    /// The map frames your spot until you pinch, drag, or zoom it yourself.
+    @State private var isFramed = true
+    @State private var visibleRegion: MKCoordinateRegion?
+    @Namespace private var mapScope
 
     var body: some View {
         ZStack {
@@ -12,6 +16,7 @@ struct SessionView: View {
                 map(session)
                 VStack(spacing: 0) {
                     TimerCard(session: session)
+                    mapControls(session)
                     Spacer()
                     if model.isPaused {
                         AwayCard(session: session, paused: true)
@@ -29,16 +34,42 @@ struct SessionView: View {
                 .onAppear { frame(session) }
             }
         }
+        .mapScope(mapScope)
+    }
+
+    private func mapControls(_ session: Session) -> some View {
+        let span = visibleRegion.map(MapZoom.spanMeters(of:))
+        return HStack(alignment: .top) {
+            MapScaleBar(scope: mapScope)
+            Spacer()
+            MapZoomButtons(canZoomIn: span.map { MapZoom.canZoom(span: $0, zoomingIn: true) } ?? true,
+                           canZoomOut: span.map { MapZoom.canZoom(span: $0, zoomingIn: false) } ?? true,
+                           showsRecenter: !isFramed,
+                           recenterLabel: session.isDroppedAnchor ? "Back to your spot" : "Back to the zone",
+                           zoom: zoom(in:), recenter: { frame(session) })
+        }
+        .padding(.top, 10)
+    }
+
+    private func zoom(in zoomingIn: Bool) {
+        guard let visibleRegion else { return }
+        let span = MapZoom.span(MapZoom.spanMeters(of: visibleRegion), zoomingIn: zoomingIn)
+        isFramed = false
+        withAnimation(.smooth(duration: 0.3)) { camera = .region(MapZoom.region(visibleRegion, spanMeters: span)) }
     }
 
     private func map(_ session: Session) -> some View {
         let away = session.away
         let tint = away ? Palette.away : (session.isDroppedAnchor ? Palette.blue : Palette.red)
-        return Map(position: $camera) {
+        return Map(position: $camera, interactionModes: [.pan, .zoom], scope: mapScope) {
             ZoneLayers(zones: [session.area], tint: tint, accuracy: model.tracker.accuracyCircle)
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
         .mapControlVisibility(.hidden)
+        .onMapCameraChange(frequency: .onEnd) { context in
+            visibleRegion = context.region
+            if camera.positionedByUser { isFramed = false }
+        }
         .ignoresSafeArea()
     }
 
@@ -56,8 +87,11 @@ struct SessionView: View {
 
     private func frame(_ session: Session) {
         let span = max(session.area.wakeRadiusMeters * 2.5, 200)
-        camera = .region(MKCoordinateRegion(center: session.area.center.coordinate,
-                                            latitudinalMeters: span * 1.6, longitudinalMeters: span))
+        isFramed = true
+        withAnimation(.smooth(duration: 0.35)) {
+            camera = .region(MKCoordinateRegion(center: session.area.center.coordinate,
+                                                latitudinalMeters: span * 1.6, longitudinalMeters: span))
+        }
     }
 }
 

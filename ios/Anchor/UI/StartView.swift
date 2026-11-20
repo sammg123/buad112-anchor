@@ -7,6 +7,12 @@ struct StartView: View {
     @Environment(AppModel.self) private var model
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var showingSettings = false
+    /// The map follows you until you pinch or drag it yourself.
+    @State private var isFollowing = true
+    /// Your +/− zoom while it follows, as a scale on its own framing.
+    @State private var zoomScale = 1.0
+    @State private var visibleRegion: MKCoordinateRegion?
+    @Namespace private var mapScope
 
     var body: some View {
         @Bindable var model = model
@@ -20,19 +26,30 @@ struct StartView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
         }
+        .mapScope(mapScope)
         .sheet(isPresented: $showingSettings) { SettingsView() }
         #if DEBUG
         .onAppear { if ProcessInfo.processInfo.arguments.contains("-settings") { showingSettings = true } }
+        .task {
+            // Simulator only: "-zoomTaps 2" presses + twice (negative: −) after the map settles.
+            let args = ProcessInfo.processInfo.arguments
+            guard let i = args.firstIndex(of: "-zoomTaps"), i + 1 < args.count, let taps = Int(args[i + 1]) else { return }
+            try? await Task.sleep(for: .seconds(6))
+            for _ in 0..<abs(taps) {
+                zoom(in: taps > 0)
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
         #endif
         .onChange(of: fixKey) { _, _ in recenter() }
         .onChange(of: model.radiusMeters) { _, _ in recenter() }
         .onChange(of: model.place.zone?.id) { _, _ in recenter() }
         .onChange(of: model.fix == nil) { _, _ in recenter() }
-        .onAppear(perform: recenter)
+        .onAppear { recenter() }
     }
 
     private var map: some View {
-        Map(position: $camera) {
+        Map(position: $camera, interactionModes: [.pan, .zoom], scope: mapScope) {
             ZoneLayers(zones: model.tracker.zones, accuracy: model.tracker.accuracyCircle)
             if model.startable == nil, let here = model.fix?.coordinate {
                 // The circle "Drop anchor here" would lock.
@@ -43,28 +60,41 @@ struct StartView: View {
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
         .mapControlVisibility(.hidden)
+        .onMapCameraChange(frequency: .onEnd) { context in
+            visibleRegion = context.region
+            if camera.positionedByUser { isFollowing = false }
+        }
         .ignoresSafeArea()
     }
 
     private var topBar: some View {
-        HStack {
-            PlaceStatusLine(place: model.place)
-            Spacer(minLength: 8)
-            Button { showingSettings = true } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
-                    .frame(width: 44, height: 44)
-                    .glassCircle()
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                PlaceStatusLine(place: model.place)
+                MapScaleBar(scope: mapScope)
             }
-            .accessibilityLabel("Settings")
+            Spacer(minLength: 8)
+            VStack(spacing: 10) {
+                Button { showingSettings = true } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                        .frame(width: 44, height: 44)
+                        .glassCircle()
+                }
+                .accessibilityLabel("Settings")
+                MapZoomButtons(canZoomIn: canZoom(in: true), canZoomOut: canZoom(in: false),
+                               showsRecenter: !isFollowing, recenterLabel: "Back to where you are",
+                               zoom: zoom(in:), recenter: { recenter(force: true) })
+            }
         }
         .padding(.top, 8)
     }
 
     private func sheet(minutes: Binding<Int>, radius: Binding<Double>) -> some View {
         VStack(spacing: 22) {
-            if model.place.zone != nil {
+            // Only where you can start in a zone; otherwise the status line up top already says where you are.
+            if model.startable != nil {
                 PlaceCard(place: model.place)
             }
             MinutePicker(minutes: minutes)
@@ -109,6 +139,7 @@ struct StartView: View {
              : "Notifications are off, so Anchor can't buzz you. Turn them on in Settings.")
             .font(.footnote.weight(.semibold))
             .foregroundStyle(Palette.red)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -118,11 +149,39 @@ struct StartView: View {
         return String(format: "%.4f,%.4f", c.latitude, c.longitude)
     }
 
-    /// Frame the zone you're in, or follow you, with room around it.
-    private func recenter() {
-        let target = model.place.zone.map { ($0.center.coordinate, max($0.wakeRadiusMeters * 2, 200)) }
+    /// What following frames: the zone you're in, or you with your circle, and how wide.
+    private var followTarget: (center: CLLocationCoordinate2D, span: Double)? {
+        model.place.zone.map { ($0.center.coordinate, max($0.wakeRadiusMeters * 2, 200)) }
             ?? model.fix.map { ($0.coordinate, max(AnchorRules.clampedRadius(model.radiusMeters) * 5, 150)) }
-        guard let (center, span) = target else { return }
+    }
+
+    private func canZoom(in zoomingIn: Bool) -> Bool {
+        if isFollowing, let base = followTarget?.span { return MapZoom.canZoom(span: base * zoomScale, zoomingIn: zoomingIn) }
+        guard let visibleRegion else { return true }
+        return MapZoom.canZoom(span: MapZoom.spanMeters(of: visibleRegion), zoomingIn: zoomingIn)
+    }
+
+    /// + or −: while following, the zoom sticks as you move; after you've moved the map, it zooms where you are
+    /// looking.
+    private func zoom(in zoomingIn: Bool) {
+        if isFollowing, let base = followTarget?.span {
+            zoomScale = MapZoom.scale(zoomScale, base: base, zoomingIn: zoomingIn)
+            recenter()
+        } else if let visibleRegion {
+            let span = MapZoom.span(MapZoom.spanMeters(of: visibleRegion), zoomingIn: zoomingIn)
+            withAnimation(.smooth(duration: 0.3)) { camera = .region(MapZoom.region(visibleRegion, spanMeters: span)) }
+        }
+    }
+
+    /// Frame the zone you're in, or follow you, with room around it. Once you've moved the map yourself it stays
+    /// put until you tap the location button (`force`), which also resets the zoom.
+    private func recenter(force: Bool = false) {
+        if force {
+            isFollowing = true
+            zoomScale = 1
+        }
+        guard isFollowing, let (center, base) = followTarget else { return }
+        let span = base * zoomScale
         // The sheet covers the lower half: aim below the target so it sits in the open top part of the map.
         let shifted = CLLocationCoordinate2D(latitude: center.latitude - span * 0.45 / 111_195, longitude: center.longitude)
         withAnimation(.smooth(duration: 0.35)) {
@@ -200,10 +259,11 @@ private struct RadiusSlider: View {
                 .accessibilityLabel("Lock radius")
                 .accessibilityValue("\(Int(radius)) meters")
             Text(margin >= 1
-                 ? "Stop stays locked until you walk out of the circle. GPS adds \(Int(margin.rounded(.up))) m here."
-                 : "Stop stays locked until you walk out of the circle.")
+                 ? "Walk out of the circle to unlock Stop. GPS adds \(Int(margin.rounded(.up))) m here."
+                 : "Walk out of the circle to unlock Stop.")
                 .font(.footnote)
                 .foregroundStyle(Palette.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .sensoryFeedback(.selection, trigger: radius)
     }
