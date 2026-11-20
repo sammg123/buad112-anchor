@@ -24,9 +24,10 @@ final class ScreenWatcher {
         register(Self.lockStateName) { [weak self] _ in
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(Self.settleSeconds))
-                guard let self else { return }
-                let state = self.state(of: Self.lockStateName)
-                self.onLockState?(state == 1 ? true : nil, (self.state(of: Self.blankName) ?? 0) != 0)
+                // Stopped meanwhile, or a state that can't be read: no news, never an unlock.
+                guard let self, let state = self.state(of: Self.lockStateName) else { return }
+                let screenBlank = self.state(of: Self.blankName).map { $0 != 0 } ?? true
+                self.onLockState?(state == 1 ? true : nil, screenBlank)
             }
         }
     }

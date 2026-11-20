@@ -1331,3 +1331,14 @@ struct LockTrackerTests {
         #expect(!gone.screen(blank: true, at: at(15)).protectedData(available: true, at: at(20)).isUnlocked)
     }
 }
+
+@Suite("Drawing taps")
+struct DrawTapTests {
+    @Test("tapping the same spot twice doesn't add a second corner")
+    func duplicate() {
+        let a = offset(campus, 0, 0), b = offset(campus, 40, 0), c = offset(campus, 40, 30)
+        let points = [a, b, c].reduce([GeoPoint]()) { DrawnArea.inserting($1, into: $0) }
+        #expect(DrawnArea.inserting(offset(campus, 40.4, 30.3), into: points) == points)
+        #expect(DrawnArea.inserting(offset(campus, 0, 30), into: points).count == 4)
+    }
+}

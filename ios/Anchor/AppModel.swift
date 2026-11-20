@@ -133,7 +133,7 @@ final class AppModel {
         let bundled = Self.loadZones()
         if bundled.isEmpty { Self.log.error("no zones from the zones file") }
         let drawn = store.seededAreas ? store.loadUserZones() : DrawnArea.seeded(from: bundled, into: store.loadUserZones())
-        if !store.seededAreas {
+        if !store.seededAreas, !bundled.isEmpty {
             store.saveUserZones(drawn)
             store.seededAreas = true
         }

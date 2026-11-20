@@ -19,8 +19,10 @@ struct CollapsibleCard<Full: View, Compact: View>: View {
     @State private var compactHeight: CGFloat = 0
     @State private var drag: CGFloat = 0
     @GestureState private var isDragging = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static var spring: Animation { .spring(response: 0.38, dampingFraction: 0.86) }
+    private var settle: Animation { reduceMotion ? .easeOut(duration: 0.15) : Self.spring }
     private let grabberHeight: CGFloat = 22
     /// Past either end the card stretches at a quarter of the finger's pace.
     private let rubber: CGFloat = 0.25
@@ -53,11 +55,13 @@ struct CollapsibleCard<Full: View, Compact: View>: View {
             if edge == .top { grabber }
         }
         .glassPanel(cornerRadius: cornerRadius)
+        // Until both sizes are known the card would draw at full height for a frame; keep it out of sight.
+        .opacity(measured ? 1 : 0)
         .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .gesture(dragGesture(low: low, high: high, base: base))
         .onChange(of: isDragging) { _, dragging in
             // A drag the system cancelled (no end event): settle back without a jump.
-            if !dragging, drag != 0 { withAnimation(Self.spring) { drag = 0 } }
+            if !dragging, drag != 0 { withAnimation(settle) { drag = 0 } }
         }
         .sensoryFeedback(.impact(weight: .light), trigger: isCollapsed)
     }
@@ -76,11 +80,16 @@ struct CollapsibleCard<Full: View, Compact: View>: View {
     private func dragGesture(low: CGFloat, high: CGFloat, base: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .global)
             .updating($isDragging) { _, dragging, _ in dragging = true }
-            .onChanged { drag = $0.translation.height }
+            .onChanged { value in
+                // A sideways swipe isn't a drag of the card.
+                if drag == 0, abs(value.translation.width) > abs(value.translation.height) { return }
+                drag = value.translation.height
+            }
             .onEnded { value in
+                guard drag != 0 else { return }
                 // Where the flick would carry it decides, so a quick short swipe still opens or closes it.
                 let landing = base + grow(value.predictedEndTranslation.height)
-                withAnimation(Self.spring) {
+                withAnimation(settle) {
                     isCollapsed = landing < (low + high) / 2
                     drag = 0
                 }
@@ -94,11 +103,11 @@ struct CollapsibleCard<Full: View, Compact: View>: View {
             .frame(maxWidth: .infinity)
             .frame(height: grabberHeight)
             .contentShape(Rectangle())
-            .onTapGesture { withAnimation(Self.spring) { isCollapsed.toggle() } }
+            .onTapGesture { withAnimation(settle) { isCollapsed.toggle() } }
             .accessibilityElement()
             .accessibilityLabel(isCollapsed ? expandLabel : collapseLabel)
             .accessibilityAddTraits(.isButton)
-            .accessibilityAction { withAnimation(Self.spring) { isCollapsed.toggle() } }
+            .accessibilityAction { withAnimation(settle) { isCollapsed.toggle() } }
     }
 }
 

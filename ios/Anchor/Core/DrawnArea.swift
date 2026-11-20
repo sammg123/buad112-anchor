@@ -59,6 +59,8 @@ enum DrawnArea {
     /// still make the shape you meant), or at the end with fewer than 3. If no place avoids a crossing, the whole
     /// outline is untangled.
     static func inserting(_ point: GeoPoint, into points: [GeoPoint]) -> [GeoPoint] {
+        // A second tap on a corner you already have isn't a new corner.
+        if points.contains(where: { Geo.distanceMeters($0, point) < duplicateMeters }) { return points }
         guard points.count >= 3 else { return points + [point] }
         let candidates = (0..<points.count).map { i -> [GeoPoint] in
             Array(points[...i]) + [point] + Array(points[(i + 1)...])
@@ -67,6 +69,9 @@ enum DrawnArea {
         if let best = clean.min(by: { perimeter($0) < perimeter($1) }) { return best }
         return untangled(points + [point])
     }
+
+    /// Taps closer than this to an existing corner are the same corner.
+    static let duplicateMeters = 1.0
 
     /// The same corners in an order that can't cross: by angle around their middle.
     static func untangled(_ points: [GeoPoint]) -> [GeoPoint] {
