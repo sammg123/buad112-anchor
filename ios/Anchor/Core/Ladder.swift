@@ -76,16 +76,12 @@ enum Escalation {
         phoneSeconds >= vibrateAfterSeconds
     }
 
-    /// The grace period only lasts until you've used up a minute of phone time (Sam, 11-20: "anytime after a
-    /// minute of screen time the sirens and the vibrations should be continuously going off"). From then on every
-    /// unlock outside Anchor counts at once, so the siren and nonstop vibration start the instant you pick it up.
-    /// The only allowance left then is a beat to tap Anchor straight after unlocking.
-    static func graceSeconds(configured: Double, phoneSeconds: Double) -> Double {
-        phoneSeconds >= alarmAfterSeconds ? min(configured, openAnchorSeconds) : configured
+    /// Every unlock gets the full grace period, however much phone time you've used (Sam, 11-20: "there's always
+    /// grace, doesn't matter the time"). Once it runs out the ladder picks up where your phone time left off, so
+    /// past 1:00 the siren and nonstop vibration start the moment grace ends.
+    static func graceSeconds(configured: Double) -> Double {
+        max(0, configured)
     }
-
-    /// Past 1:00 of phone time: time to open Anchor right after unlocking without setting anything off.
-    static let openAnchorSeconds = 2.0
 
     /// One row of the annoyance list in Settings. `startsAt` is phone time after the grace period.
     struct Annoyance: Equatable, Sendable, Identifiable {
@@ -110,8 +106,8 @@ enum Escalation {
                       isSound: false),
             Annoyance(startsAt: voiceEverySeconds, title: "A voice reads your phone time",
                       detail: "Out loud, over whatever is playing, even on silent.", symbol: "speaker.wave.3.fill", isSound: true),
-            Annoyance(startsAt: alarmAfterSeconds, title: "Siren, and no more grace",
-                      detail: "Loops until you lock the phone or open Anchor. From here on, every unlock sirens and vibrates instantly.",
+            Annoyance(startsAt: alarmAfterSeconds, title: "Siren",
+                      detail: "Loops until you lock the phone or open Anchor. From here on, the siren and vibration start the moment a grace period ends.",
                       symbol: "light.beacon.max.fill", isSound: true),
             Annoyance(startsAt: Ladder.fastAfterSeconds, title: "Notification every 5 s",
                       detail: "Three times as often.", symbol: "bell.and.waves.left.and.right.fill", isSound: false)

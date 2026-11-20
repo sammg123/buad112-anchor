@@ -1047,24 +1047,23 @@ struct NewAreaTests {
     }
 }
 
-// MARK: - No grace after a minute
+// MARK: - Always grace
 
-@Suite("No grace after a minute")
-struct NoGraceAfterMinuteTests {
-    @Test("before 1:00 of phone time you get your grace; from 1:00 on, only the 2 s it takes to tap Anchor")
+@Suite("Always grace")
+struct AlwaysGraceTests {
+    @Test("every unlock gets your full grace period, however much phone time you've used")
     func grace() {
-        #expect(Escalation.graceSeconds(configured: 10, phoneSeconds: 59) == 10)
-        #expect(Escalation.graceSeconds(configured: 10, phoneSeconds: 60) == Escalation.openAnchorSeconds)
-        #expect(Escalation.graceSeconds(configured: 30, phoneSeconds: 300) == 2)
-        #expect(Escalation.graceSeconds(configured: 0, phoneSeconds: 300) == 0)
+        #expect(Escalation.graceSeconds(configured: 10) == 10)
+        #expect(Escalation.graceSeconds(configured: 30) == 30)
+        #expect(Escalation.graceSeconds(configured: 0) == 0)
     }
 
-    @Test("past 1:00, unlocking counts at once, and the siren and nonstop vibration are both on")
-    func instant() {
+    @Test("past 1:00, the grace still runs first; once it's over the siren and nonstop vibration start at once")
+    func afterGrace() {
         let unlocked = Date(timeIntervalSince1970: 1_000)
-        let grace = Escalation.graceSeconds(configured: 10, phoneSeconds: 75)
-        #expect(!PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(1.9), grace: grace))
-        #expect(PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(2), grace: grace))
+        let grace = Escalation.graceSeconds(configured: 10)
+        #expect(!PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(9.9), grace: grace))
+        #expect(PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(10), grace: grace))
         #expect(Escalation.isAlarm(phoneSeconds: 75))
         #expect(Escalation.isContinuousVibration(phoneSeconds: 75))
     }
