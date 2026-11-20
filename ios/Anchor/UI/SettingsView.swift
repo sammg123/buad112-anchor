@@ -113,6 +113,8 @@ struct SettingsView: View {
         Section {
             StatusRow(symbol: "location.fill", tint: Palette.blue, title: "Location", value: locationText,
                       isGood: model.locationStatus == .authorizedAlways)
+            StatusRow(symbol: "scope", tint: .indigo, title: "Precise Location",
+                      value: model.isPrecise ? "On" : "Off", isGood: model.isPrecise)
             StatusRow(symbol: "figure.walk", tint: .green, title: "Motion & Fitness",
                       value: model.motionAllowed ? "On" : "Off", isGood: model.motionAllowed)
             StatusRow(symbol: "bell.badge.fill", tint: .red, title: "Notifications",
@@ -127,7 +129,7 @@ struct SettingsView: View {
         } header: {
             Text("What Anchor needs")
         } footer: {
-            Text("Location works best on Always. Using a Focus? Allow Time Sensitive notifications in it. No vibration? Settings › Sounds & Haptics › Haptics: Always Play.")
+            Text("Location on Always lets Anchor notice when you walk into a zone. Using a Focus? Allow Time Sensitive notifications in it. No vibration? Settings › Sounds & Haptics › Haptics: Always Play.")
         }
     }
 

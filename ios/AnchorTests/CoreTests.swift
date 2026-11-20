@@ -587,3 +587,42 @@ struct PresenceTests {
         #expect(a.updated(depth: 5, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(6)).state == .inside)
     }
 }
+
+// MARK: - Zone review fixes
+
+@Suite("Zone review fixes")
+struct ZoneReviewTests {
+    private let origin = GeoPoint(lat: 34.0218, lng: -118.2830)
+    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    private func fix(_ east: Double, acc: Double = 10, at seconds: Double) -> LocationFix {
+        LocationFix(point: offset(origin, east, 0), accuracy: acc, time: t0.addingTimeInterval(seconds))
+    }
+
+    @Test("a reading older than 15 s decides nothing")
+    func stale() {
+        let f = PresenceFilter().adding(fix(0, at: 0))
+        #expect(f.smoothed(at: t0.addingTimeInterval(10)) != nil)
+        #expect(f.smoothed(at: t0.addingTimeInterval(16)) == nil)
+    }
+
+    @Test("a reading that arrives out of order is ignored, not allowed to wipe the window")
+    func outOfOrder() {
+        let f = PresenceFilter().adding(fix(0, at: 10)).adding(fix(0, at: 11)).adding(fix(0, at: 5))
+        #expect(f.fixes.count == 2)
+    }
+
+    @Test("walking steadily is never mistaken for a GPS jump")
+    func walkingAccepted() {
+        var f = PresenceFilter()
+        for s in 0..<40 { f = f.adding(fix(Double(s) * 1.5, acc: 5, at: Double(s))) }
+        #expect(f.fixes.last?.time == t0.addingTimeInterval(39))
+        #expect(f.fixes.count >= 30)
+    }
+
+    @Test("zones with impossible coordinates are refused")
+    func badCoordinates() {
+        #expect(throws: ZoneCatalog.Problem.self) {
+            try ZoneCatalog.decode(Data(#"{"version":1,"zones":[{"id":"x","name":"X","polygon":[[134,-118],[34.1,-118],[34.1,-118.1]]}]}"#.utf8))
+        }
+    }
+}

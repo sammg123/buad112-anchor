@@ -8,6 +8,7 @@ struct SessionStore {
     private static let finishedKey = "anchor.finished.v2"
     private static let configKey = "anchor.config.v2"
     private static let onboardedKey = "anchor.onboarded.v1"
+    private static let arrivalsKey = "anchor.arrivals.v1"
 
     private let defaults: UserDefaults
 
@@ -18,6 +19,17 @@ struct SessionStore {
     var hasOnboarded: Bool {
         get { defaults.bool(forKey: Self.onboardedKey) }
         nonmutating set { defaults.set(newValue, forKey: Self.onboardedKey) }
+    }
+
+    /// When each zone's arrival notice last went out (seconds since 1970), so the cooldown survives relaunches.
+    func lastArrival(atZone id: String) -> Date? {
+        (defaults.dictionary(forKey: Self.arrivalsKey)?[id] as? Double).map { Date(timeIntervalSince1970: $0) }
+    }
+
+    func saveArrival(atZone id: String, at date: Date) {
+        var all = defaults.dictionary(forKey: Self.arrivalsKey) ?? [:]
+        all[id] = date.timeIntervalSince1970
+        defaults.set(all, forKey: Self.arrivalsKey)
     }
 
     func loadRunning() -> Session? { load(Session.self, key: Self.runningKey) }

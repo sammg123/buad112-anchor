@@ -16,6 +16,8 @@ struct PresenceFilter: Equatable, Sendable {
     /// A new reading farther than this many accuracies (plus walking speed) from the average is a blunder.
     static let blunderFactor = 3.0
     static let maxWalkingSpeed = 3.0
+    /// A cleaned-up position older than this decides nothing (GPS stopped, Anchor was paused by iOS).
+    static let maxStaleSeconds = 15.0
 
     let fixes: [LocationFix]
 
@@ -24,11 +26,14 @@ struct PresenceFilter: Equatable, Sendable {
     }
 
     func adding(_ fix: LocationFix) -> PresenceFilter {
-        let recent = fixes.filter { $0.time <= fix.time && fix.time.timeIntervalSince($0.time) <= Self.windowSeconds }
+        // A reading older than the newest one (a cached fix) is ignored rather than allowed to reshape the window.
+        if let newest = fixes.last, fix.time < newest.time { return self }
+        let recent = fixes.filter { fix.time.timeIntervalSince($0.time) <= Self.windowSeconds }
         guard fix.accuracy >= 0, fix.accuracy <= Self.maxAccuracyMeters else { return PresenceFilter(fixes: recent) }
-        if let average = Self.average(recent), let latest = recent.last {
-            let jump = Geo.distanceMeters(average.point, fix.point)
-            let allowed = Self.blunderFactor * max(fix.accuracy, average.accuracy)
+        // Compared with the latest accepted reading, not the average, so a steady walk never looks like a jump.
+        if let latest = recent.last {
+            let jump = Geo.distanceMeters(latest.point, fix.point)
+            let allowed = Self.blunderFactor * max(fix.accuracy, latest.accuracy)
                 + Self.maxWalkingSpeed * fix.time.timeIntervalSince(latest.time)
             if jump > allowed { return PresenceFilter(fixes: recent) }
         }
@@ -37,6 +42,12 @@ struct PresenceFilter: Equatable, Sendable {
 
     /// The cleaned-up position, or nil with nothing usable yet.
     var smoothed: LocationFix? { Self.average(fixes) }
+
+    /// The cleaned-up position only if it is fresh: an old one must not decide anything.
+    func smoothed(at now: Date) -> LocationFix? {
+        guard let latest = fixes.last, now.timeIntervalSince(latest.time) <= Self.maxStaleSeconds else { return nil }
+        return Self.average(fixes)
+    }
 
     /// Inverse-variance weighted average; the accuracy reported is the weighted average accuracy (conservative).
     private static func average(_ fixes: [LocationFix]) -> LocationFix? {

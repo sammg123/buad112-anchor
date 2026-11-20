@@ -120,8 +120,9 @@ enum ZoneCatalog {
         let file = try JSONDecoder().decode(File.self, from: data)
         guard !file.zones.isEmpty else { throw Problem.empty }
         return try file.zones.map { record in
-            let points = record.polygon.compactMap { pair in
-                pair.count == 2 && pair.allSatisfy(\.isFinite) ? GeoPoint(lat: pair[0], lng: pair[1]) : nil
+            let points = record.polygon.compactMap { pair -> GeoPoint? in
+                guard pair.count == 2, abs(pair[0]) <= 90, abs(pair[1]) <= 180 else { return nil }
+                return GeoPoint(lat: pair[0], lng: pair[1])
             }
             guard points.count == record.polygon.count, points.count >= 3 else { throw Problem.badOutline(record.id) }
             return Zone(id: record.id, name: record.name, polygon: points)

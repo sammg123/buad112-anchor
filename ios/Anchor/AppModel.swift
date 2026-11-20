@@ -67,8 +67,6 @@ final class AppModel {
     private let liveActivity = LiveActivityController()
     private let activity = ActivityMonitor()
     private let zoneStore: ZoneStore = BundledZoneStore()
-    /// The last arrival notice per zone, so walking in and out of the wake circle doesn't nag.
-    private var lastArrivalNotice: [String: Date] = [:]
     private static let arrivalNoticeCooldownSeconds = 30.0 * 60
     let volumeGuard = VolumeGuard()
     /// Launched in the background (iOS relaunching a session), Anchor is not on screen until a scene says so.
@@ -83,6 +81,8 @@ final class AppModel {
     private static let relockQuietSeconds = 15.0
     private var shortcutGraceUntil = Date.distantPast
     private var pendingConfig: SessionConfig?
+    /// A zone start (from the arrival notice) waiting for a fresh reading that confirms you're there.
+    private var pendingZoneID: String?
     /// The session ended in the background in black and white; color comes back when Anchor is opened.
     private var needsColorBack = false
     private var lastSaved = Date.distantPast
@@ -104,7 +104,12 @@ final class AppModel {
         finished = store.loadFinished()
         locationStatus = location.status
         location.onFix = { [weak self] fix in self?.received(fix) }
-        location.onAuthorizationChange = { [weak self] status in self?.locationStatus = status }
+        location.onAuthorizationChange = { [weak self] status in
+            guard let self else { return }
+            self.locationStatus = status
+            // Arrival wake-ups need Always; register them again once it's granted.
+            if status == .authorizedAlways { self.location.watch(zones: self.zones) }
+        }
         loadZones()
         location.onEnterZone = { [weak self] id in self?.arrived(atZone: id) }
         location.watch(zones: zones)
@@ -145,14 +150,14 @@ final class AppModel {
 
     /// The zone you're standing in right now (start screen), judged with the same edge slack as coming back in.
     var currentZone: Zone? {
-        guard let here = filter.smoothed else { return nil }
+        guard let here = filter.smoothed(at: now) else { return nil }
         let slack = min(here.accuracy * 0.5, ZonePresence.enterSlackMeters)
         return zones.first { $0.depth(of: here.point) >= -slack }
     }
 
     /// Roughly how far to walk before Stop unlocks: out past the edge by the leave margin.
     var metersToUnlock: Double? {
-        guard let session, let here = filter.smoothed else { return nil }
+        guard let session, let here = filter.smoothed(at: now) else { return nil }
         let margin = max(ZonePresence.minLeaveMarginMeters, here.accuracy)
         return max(1, session.area.depth(of: here.point) + margin)
     }
@@ -203,6 +208,7 @@ final class AppModel {
             notice = "Anchor needs Location and Motion & Fitness. Allow them in Settings › Anchor."
             return
         }
+        guard requirePrecise() else { return }
         let config = SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),
                                    grayscale: grayscale, library: library, grace: graceSeconds)
         if let fix, isUsableAnchor(fix) {
@@ -221,13 +227,51 @@ final class AppModel {
             notice = "Anchor needs Location and Motion & Fitness. Allow them in Settings › Anchor."
             return
         }
-        let config = SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),
-                                   grayscale: grayscale, library: library, grace: graceSeconds)
-        begin(config, in: zone)
+        guard requirePrecise() else { return }
+        now = Date()
+        if currentZone?.id == zone.id {
+            begin(zoneConfig(), in: zone)
+        } else {
+            // From a notification, possibly an old one: check you're really there before locking anything.
+            pendingZoneID = zone.id
+            isFindingSpot = true
+            location.refresh()
+        }
+    }
+
+    private func zoneConfig() -> SessionConfig {
+        SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),
+                      grayscale: grayscale, library: library, grace: graceSeconds)
+    }
+
+    /// Zones can't work on approximate location; ask iOS for Precise and say why.
+    private func requirePrecise() -> Bool {
+        guard location.isPrecise else {
+            location.requestPrecise()
+            notice = "Anchor needs Precise Location to tell where zones start. Turn it on in Settings › Anchor › Location."
+            return false
+        }
+        return true
+    }
+
+    /// A zone start waiting for a fresh reading: start if you're in the zone, give up if you're clearly not.
+    private func checkPendingZone() {
+        guard let id = pendingZoneID, let zone = zones.first(where: { $0.id == id }),
+              let here = filter.smoothed(at: now) else { return }
+        let depth = zone.depth(of: here.point)
+        if depth >= -min(here.accuracy * 0.5, ZonePresence.enterSlackMeters) {
+            pendingZoneID = nil
+            begin(zoneConfig(), in: zone)
+        } else if depth <= -max(ZonePresence.minLeaveMarginMeters, here.accuracy) {
+            pendingZoneID = nil
+            isFindingSpot = false
+            notice = "You're not in \(zone.name) right now, so there's nothing to lock."
+        }
     }
 
     func cancelFindingSpot() {
         pendingConfig = nil
+        pendingZoneID = nil
         isFindingSpot = false
     }
 
@@ -240,6 +284,8 @@ final class AppModel {
     func togglePause() {
         guard Self.showsDevTools, session != nil else { return }
         isPaused.toggle()
+        // A leave that was half-way when you paused must not complete the instant you unpause.
+        presence = ZonePresence(state: presence.state, pendingSince: nil)
         reconcile()
     }
 
@@ -272,6 +318,8 @@ final class AppModel {
             apply(current.lockedPhone(at: Date(), unseenSeconds: Self.quickReturnSeconds))
         }
         if active {
+            // A session started from a notification while iOS still had Anchor in the background gets its card now.
+            if let current = session { liveActivity.start(for: current, at: Date()) }
             Task { await refreshPermissions() }
             if needsColorBack {
                 needsColorBack = false
@@ -288,6 +336,11 @@ final class AppModel {
         if let config = pendingConfig, isUsableAnchor(newFix) {
             begin(config, in: anchorZone(at: newFix, config: config))
             return
+        }
+        now = Date()
+        if pendingZoneID != nil {
+            checkPendingZone()
+            if session != nil { return }
         }
         #if DEBUG
         if autoStartsZone, session == nil, let zone = currentZone {
@@ -316,8 +369,9 @@ final class AppModel {
     private func arrived(atZone id: String) {
         guard session == nil, let zone = zones.first(where: { $0.id == id }) else { return }
         let now = Date()
-        if let last = lastArrivalNotice[id], now.timeIntervalSince(last) < Self.arrivalNoticeCooldownSeconds { return }
-        lastArrivalNotice[id] = now
+        // Persisted: iOS relaunches Anchor fresh for each arrival, and memory alone would forget.
+        if let last = store.lastArrival(atZone: id), now.timeIntervalSince(last) < Self.arrivalNoticeCooldownSeconds { return }
+        store.saveArrival(atZone: id, at: now)
         buzzer.zoneArrival(zone)
     }
 
@@ -376,6 +430,7 @@ final class AppModel {
 
     private func begin(_ config: SessionConfig, in zone: Zone) {
         pendingConfig = nil
+        pendingZoneID = nil
         isFindingSpot = false
         finished = nil
         store.saveFinished(nil)
@@ -565,7 +620,7 @@ final class AppModel {
     /// Location decides: the cleaned-up GPS against the session's zone, with edge slack, a dwell, and no leaving
     /// while the phone sits still. Nil until there is a usable reading.
     private func isAway() -> Bool? {
-        guard let session, let here = filter.smoothed else { return nil }
+        guard let session, let here = filter.smoothed(at: now) else { return nil }
         presence = presence.updated(depth: session.area.depth(of: here.point), accuracy: here.accuracy,
                                     isStationary: activity.isStationary, at: now)
         return presence.state == .outside
