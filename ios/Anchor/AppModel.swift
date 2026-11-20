@@ -100,6 +100,8 @@ final class AppModel {
     private var pendingAttempt: UUID?
     /// Keeps `now` (and the start screen) current with no session running.
     private var idleTicker: Timer?
+    /// The latest zone-watch update; each waits for the one before.
+    private var watchUpdate: Task<Void, Never>?
     private var lastSaved = Date.distantPast
     private var ticker: Timer?
     private var observers: [NSObjectProtocol] = []
@@ -198,15 +200,14 @@ final class AppModel {
     /// accuracy circle has to be outside).
     /// GPS error right now (the margin used at edges), for the start screen.
     var gpsMargin: Double? {
-        tracker.freshEstimate(at: now).map { LocationFilter.margin(estimateAccuracy: $0.accuracy) }
+        tracker.freshEstimate(at: now).map(tracker.margin(for:))
     }
 
     /// A dropped anchor: how far you are from it and how far out Stop unlocks (your radius plus the GPS margin).
     var anchorReadout: (meters: Double, unlocksAt: Double)? {
         guard let session, session.isDroppedAnchor, let here = tracker.freshEstimate(at: now) else { return nil }
-        let radius = session.config.radiusMeters ?? session.area.enclosingCircle.radius
         return (Geo.distanceMeters(session.area.center, here.point),
-                radius + LocationFilter.margin(estimateAccuracy: here.accuracy))
+                session.area.enclosingCircle.radius + tracker.margin(for: here))
     }
 
     /// Meters to the nearest way out of a building (its edge), while you're inside one; nil otherwise.
@@ -308,14 +309,18 @@ final class AppModel {
 
     /// Deletes areas you drew (not one a session is running in).
     func deleteUserZones(_ ids: Set<String>) {
-        let keep = ids.subtracting([session?.area.id].compactMap { $0 })
-        setUserZones(userZones.filter { !keep.contains($0.id) })
+        let inUse = Set([session?.area.id].compactMap { $0 })
+        if !ids.isDisjoint(with: inUse) { notice = "That area has a session running in it. End the session first." }
+        let remove = ids.subtracting(inUse)
+        setUserZones(userZones.filter { !remove.contains($0.id) })
     }
 
     private func setUserZones(_ zones: [Zone]) {
         userZones = zones
         store.saveUserZones(zones)
         tracker.setZones(bundledZones + zones)
+        // A deleted area's watch is dropped without an "left" event; forget it here so GPS can rest.
+        nearZones.formIntersection(tracker.zones.map(\.id))
         startZoneWatch()
         updateTracking()
     }
@@ -355,11 +360,15 @@ final class AppModel {
             && AnchorRules.isUsableAnchor(accuracy: fix.horizontalAccuracy, age: -fix.timestamp.timeIntervalSinceNow)
     }
 
-    /// The anchor goes where the smoothed position says you are (steadier than one reading), else the reading.
+    /// The anchor goes where the smoothed position says you are (steadier than one reading). With only a rough
+    /// reading, the circle widens by the part of its error the edge margin doesn't already cover.
     private func beginAnchor(at fix: CLLocation) {
         let radius = AnchorRules.clampedRadius(radiusMeters)
-        let center = tracker.freshEstimate(at: Date())?.point ?? fix.point
-        begin(in: Zone.droppedAnchor(center: center, radius: radius), areaID: nil, radius: radius)
+        if let here = tracker.freshEstimate(at: Date()) {
+            return begin(in: Zone.droppedAnchor(center: here.point, radius: radius), areaID: nil, radius: radius)
+        }
+        let extra = max(0, fix.horizontalAccuracy - LocationFilter.minMarginMeters)
+        begin(in: Zone.droppedAnchor(center: fix.point, radius: radius + extra), areaID: nil, radius: radius)
     }
 
     func cancelFindingSpot() {
@@ -425,7 +434,10 @@ final class AppModel {
         if zones.count < tracker.zones.count {
             Self.log.notice("watching \(zones.count) of \(self.tracker.zones.count) zones: iOS allows 20 conditions")
         }
-        Task {
+        // In order: a save then a delete must reach the watch as a save then a delete.
+        let previous = watchUpdate
+        watchUpdate = Task {
+            await previous?.value
             await ZoneWatch.shared.watch(zones) { [weak self] event in
                 Task { @MainActor in self?.zoneEvent(event) }
             }
@@ -595,7 +607,8 @@ final class AppModel {
     }
 
     private func restore() {
-        guard let saved = store.loadRunning() else {
+        // The unit-test host must not resume a session (one left by a UI test hangs it before tests connect).
+        guard !Self.isRunningTests, let saved = store.loadRunning() else {
             // A card left from a session that ended while Anchor was not running would count forever.
             liveActivity.end()
             return

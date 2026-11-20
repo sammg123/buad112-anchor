@@ -195,6 +195,18 @@ struct StartView: View {
     private var collapsedBar: some View {
         VStack(spacing: 4) {
             handle
+            if model.isFindingSpot {
+                FindingSpot()
+            } else {
+                collapsedActions
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+        .glassPanel(cornerRadius: 30)
+    }
+
+    private var collapsedActions: some View {
             HStack(spacing: 10) {
                 Button { isSheetCollapsed = false } label: {
                     Label("\(model.minutes) min", systemImage: "chevron.up")
@@ -231,10 +243,6 @@ struct StartView: View {
                     .foregroundStyle(.white)
                 }
             }
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
-        .glassPanel(cornerRadius: 30)
     }
 
     private func startDrawing() {

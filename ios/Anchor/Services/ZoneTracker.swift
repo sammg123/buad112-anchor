@@ -32,7 +32,7 @@ final class ZoneTracker {
             buildings = kept
             return
         }
-        let margin = LocationFilter.margin(estimateAccuracy: here.accuracy)
+        let margin = self.margin(for: here)
         let added = allZones.filter { kept[$0.id] == nil }.map { zone in
             (zone.id, BuildingPresence.unknown.updated(with: ZoneGeometry.fit(center: here.point, radius: margin, in: zone.polygon), at: now))
         }
@@ -77,7 +77,7 @@ final class ZoneTracker {
         guard let estimate = next.estimate, next != filter else { return verdict }
         filter = next
         lastUsed = reading
-        let margin = LocationFilter.margin(estimateAccuracy: estimate.accuracy)
+        let margin = LocationFilter.margin(estimateAccuracy: estimate.accuracy, readingAccuracy: reading.accuracy)
         buildings = Dictionary(uniqueKeysWithValues: allZones.map { zone in
             let fit = ZoneGeometry.fit(center: estimate.point, radius: margin, in: zone.polygon)
             return (zone.id, (buildings[zone.id] ?? .unknown).updated(with: fit, at: now))
@@ -130,6 +130,11 @@ final class ZoneTracker {
     /// The circle to draw around you: the cleaned-up position and the margin used at edges.
     var accuracyCircle: (center: GeoPoint, radius: Double)? {
         guard let estimate else { return nil }
-        return (estimate.point, LocationFilter.margin(estimateAccuracy: estimate.accuracy))
+        return (estimate.point, margin(for: estimate))
+    }
+
+    /// The edge margin for a position, using the last reading's reported error.
+    func margin(for estimate: LocationEstimate) -> Double {
+        LocationFilter.margin(estimateAccuracy: estimate.accuracy, readingAccuracy: lastUsed?.accuracy ?? 0)
     }
 }

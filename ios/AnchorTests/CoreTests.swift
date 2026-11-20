@@ -786,14 +786,29 @@ struct DroppedAnchorTests {
         #expect(abs(spot.depth(of: campus) - 25) < 0.5)
     }
 
-    @Test("the edge margin is the smoothed GPS error, at least 5 m")
+    @Test("the edge margin: at least 8 m, more when the GPS is rougher")
     func margin() {
-        #expect(LocationFilter.margin(estimateAccuracy: 3) == 5)
-        #expect(LocationFilter.margin(estimateAccuracy: 8) == 8)
+        #expect(LocationFilter.margin(estimateAccuracy: 3, readingAccuracy: 5) == 8)
+        #expect(LocationFilter.margin(estimateAccuracy: 3, readingAccuracy: 20) == 15)
+        #expect(LocationFilter.margin(estimateAccuracy: 12, readingAccuracy: 10) == 12)
     }
 
     @MainActor
-    @Test("with steady 5 m GPS, a 25 m spot frees you about 30 m out, not 46")
+    @Test("sitting 8 m inside an area, GPS drifting 13 m outward with 10 m readings doesn't free you")
+    func drift() {
+        let tracker = ZoneTracker(zones: [])
+        let spot = Zone.droppedAnchor(center: campus, radius: 25)
+        tracker.setExtraZone(spot)
+        for s in 0..<30 {
+            let time = t0.addingTimeInterval(Double(s))
+            // You're 17 m out from the anchor (8 m inside the edge); GPS says 30 m (5 m outside).
+            tracker.received(LocationReading(point: offset(campus, 30, 0), accuracy: 10, time: time, isSpoofed: false), at: time)
+        }
+        #expect(tracker.building(spot.id, at: t0.addingTimeInterval(29)) != .outside)
+    }
+
+    @MainActor
+    @Test("with steady 5 m GPS, a 25 m spot frees you about 33 m out, not 46")
     func unlockDistance() {
         func state(atMeters meters: Double) -> BuildingPresence.State {
             let tracker = ZoneTracker(zones: [])
@@ -805,8 +820,8 @@ struct DroppedAnchorTests {
             }
             return tracker.building(spot.id, at: t0.addingTimeInterval(14))
         }
-        #expect(state(atMeters: 27) != .outside)
-        #expect(state(atMeters: 32) == .outside)
+        #expect(state(atMeters: 31) != .outside)
+        #expect(state(atMeters: 34) == .outside)
         #expect(state(atMeters: 20) == .inside)
     }
 
