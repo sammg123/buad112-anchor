@@ -5,18 +5,21 @@ import SwiftUI
 struct ZoneLayers: MapContent {
     let zones: [Zone]
     var tint: Color = Palette.red
+    /// Your own drawn areas in their own color (start screen), or nil to use `tint` for everything.
+    var userAreaTint: Color?
     let accuracy: (center: GeoPoint, radius: Double)?
 
     var body: some MapContent {
         ForEach(zones) { zone in
+            let color = zone.isUserArea ? (userAreaTint ?? tint) : tint
             MapPolygon(coordinates: zone.polygon.map(\.coordinate))
-                .foregroundStyle(tint.opacity(zone.isDroppedAnchor ? 0.14 : 0.2))
-                .stroke(tint.opacity(0.85), lineWidth: 2)
+                .foregroundStyle(color.opacity(zone.isDroppedAnchor ? 0.14 : 0.2))
+                .stroke(color.opacity(0.85), lineWidth: 2)
             Annotation("", coordinate: zone.center.coordinate, anchor: .center) {
                 if zone.isDroppedAnchor {
-                    AnchorPin(size: 30, color: tint)
+                    AnchorPin(size: 30, color: color)
                 } else {
-                    ZoneLabel(name: zone.name, tint: tint)
+                    ZoneLabel(name: zone.name, tint: color)
                 }
             }
         }

@@ -22,6 +22,23 @@ final class ZoneTracker {
 
     var estimate: LocationEstimate? { filter.estimate }
 
+    /// Replaces the zone list (your areas changed). Zones still listed keep what's known about them; a new one
+    /// is checked against your current position right away instead of waiting for the next reading.
+    func setZones(_ zones: [Zone], at now: Date = Date()) {
+        self.zones = zones
+        let ids = Set(allZones.map(\.id))
+        let kept = buildings.filter { ids.contains($0.key) }
+        guard let here = freshEstimate(at: now) else {
+            buildings = kept
+            return
+        }
+        let margin = LocationFilter.margin(estimateAccuracy: here.accuracy)
+        let added = allZones.filter { kept[$0.id] == nil }.map { zone in
+            (zone.id, BuildingPresence.unknown.updated(with: ZoneGeometry.fit(center: here.point, radius: margin, in: zone.polygon), at: now))
+        }
+        buildings = kept.merging(added) { old, _ in old }
+    }
+
     /// Tracks a dropped anchor's circle (or nothing). A new spot starts fresh: whatever was known about the last
     /// one is forgotten.
     func setExtraZone(_ zone: Zone?) {

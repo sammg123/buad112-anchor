@@ -14,6 +14,7 @@ struct SettingsView: View {
                 annoyanceSection
                 wholeSessionSection
                 switchesSection(library: $model.library, autoStart: $model.autoStart)
+                myAreasSection
                 grayscaleSection
                 permissionsSection
                 trySection
@@ -75,6 +76,28 @@ struct SettingsView: View {
             Text("Grace period and minutes are on the start screen.")
         }
         .tint(Palette.blue)
+    }
+
+    /// Areas you drew on the map: swipe to delete.
+    private var myAreasSection: some View {
+        Section {
+            if model.userZones.isEmpty {
+                Text("None yet. On the start screen, tap **Draw your own area on the map** and tap its corners.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(model.userZones) { zone in
+                RowLabel(symbol: "pencil.and.outline", tint: Palette.blue, title: zone.name,
+                         detail: "\(zone.polygon.count) corners · about \(Int(DrawnArea.squareMeters(zone.polygon).rounded())) m²")
+            }
+            .onDelete { offsets in
+                model.deleteUserZones(Set(offsets.map { model.userZones[$0].id }))
+            }
+        } header: {
+            Text("My areas")
+        } footer: {
+            Text("Inside any of these, Anchor locks your phone, like the library's study areas. Swipe left to delete.")
+        }
     }
 
     /// Apple lets no app switch the screen to black and white; the side button can, instantly.

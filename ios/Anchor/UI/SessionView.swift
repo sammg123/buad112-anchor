@@ -63,7 +63,7 @@ struct SessionView: View {
 
     private func map(_ session: Session) -> some View {
         let away = session.away
-        let tint = away ? Palette.away : (session.isDroppedAnchor ? Palette.blue : Palette.red)
+        let tint = away ? Palette.away : (session.isDroppedAnchor || session.area.isUserArea ? Palette.blue : Palette.red)
         return Map(position: $camera, interactionModes: [.pan, .zoom], scope: mapScope) {
             ZoneLayers(zones: [session.area], tint: tint, accuracy: model.tracker.accuracyCircle)
         }

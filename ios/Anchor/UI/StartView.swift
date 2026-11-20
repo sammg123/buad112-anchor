@@ -1,8 +1,8 @@
 import MapKit
 import SwiftUI
 
-/// The start screen: drop an anchor anywhere (your radius around you), or, in a no-phone zone's study area,
-/// start there. Zones are shaded on the map, with where you are.
+/// The start screen: drop an anchor anywhere (your radius around you), draw your own area on the map, or, in a
+/// no-phone zone's study area, start there. The sheet drags down out of the way to show the whole map.
 struct StartView: View {
     @Environment(AppModel.self) private var model
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
@@ -15,20 +15,65 @@ struct StartView: View {
     /// Where a zoom tap is heading, so a second tap mid-animation goes one step further rather than repeating.
     @State private var zoomTarget: MKCoordinateRegion?
     @Namespace private var mapScope
+    /// The sheet dragged down to a slim bar, so the whole map shows.
+    @State private var isSheetCollapsed = false
+    /// Corners of the area being drawn; nil when not drawing.
+    @State private var drawing: [GeoPoint]?
+    @State private var isNamingArea = false
+    @State private var areaName = ""
 
     var body: some View {
         @Bindable var model = model
         ZStack {
             map
-            VStack(spacing: 0) {
-                topBar
-                Spacer()
-                sheet(minutes: $model.minutes, radius: $model.radiusMeters)
+            if let points = drawing {
+                VStack(spacing: 10) {
+                    DrawingHeader(points: points)
+                    HStack {
+                        MapScaleBar(scope: mapScope)
+                        Spacer()
+                        zoomButtons
+                    }
+                    Spacer()
+                    DrawingToolbar(points: points,
+                                   undo: { drawing = Array(points.dropLast()) },
+                                   clear: { drawing = [] },
+                                   cancel: { endDrawing() },
+                                   save: {
+                                       areaName = DrawnArea.defaultName(existing: model.userZones)
+                                       isNamingArea = true
+                                   })
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 8)
+                .transition(.opacity)
+            } else {
+                VStack(spacing: 0) {
+                    topBar
+                    Spacer()
+                    if isSheetCollapsed {
+                        collapsedBar
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        sheet(minutes: $model.minutes, radius: $model.radiusMeters)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
         }
+        .animation(.smooth(duration: 0.3), value: isSheetCollapsed)
+        .animation(.smooth(duration: 0.25), value: drawing == nil)
         .mapScope(mapScope)
+        .alert("Name this area", isPresented: $isNamingArea) {
+            TextField("Name", text: $areaName)
+            Button("Save") { saveArea() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Inside it, Anchor locks your phone. It's saved for next time too.")
+        }
         .sheet(isPresented: $showingSettings) { SettingsView() }
         #if DEBUG
         .onAppear { if ProcessInfo.processInfo.arguments.contains("-settings") { showingSettings = true } }
@@ -51,27 +96,54 @@ struct StartView: View {
         .onChange(of: model.radiusMeters) { _, _ in recenter() }
         .onChange(of: model.place.zone?.id) { _, _ in recenter() }
         .onChange(of: model.fix == nil) { _, _ in recenter() }
+        .onChange(of: isSheetCollapsed) { _, _ in recenter() }
         .onAppear { recenter() }
     }
 
     private var map: some View {
-        Map(position: $camera, interactionModes: [.pan, .zoom], scope: mapScope) {
-            ZoneLayers(zones: model.tracker.zones, accuracy: model.tracker.accuracyCircle)
-            if model.startable == nil, let here = model.fix?.coordinate {
+        MapReader { proxy in
+            Map(position: $camera, interactionModes: [.pan, .zoom], scope: mapScope) {
+                mapContent
+            }
+            .mapStyle(.standard(pointsOfInterest: .excludingAll))
+            .mapControlVisibility(.hidden)
+            .onMapCameraChange(frequency: .onEnd) { context in
+                visibleRegion = context.region
+                zoomTarget = nil
+                if camera.positionedByUser { isFollowing = false }
+            }
+            // While drawing, each tap on the map adds a corner.
+            .simultaneousGesture(SpatialTapGesture(coordinateSpace: .local).onEnded { tap in
+                guard let points = drawing, points.count < DrawnArea.maxPoints,
+                      let coordinate = proxy.convert(tap.location, from: .local) else { return }
+                drawing = points + [GeoPoint(lat: coordinate.latitude, lng: coordinate.longitude)]
+            }, including: drawing == nil ? .subviews : .all)
+            .sensoryFeedback(.impact(weight: .light), trigger: drawing?.count ?? 0)
+        }
+        .ignoresSafeArea()
+    }
+
+    @MapContentBuilder
+    private var mapContent: some MapContent {
+        ZoneLayers(zones: model.tracker.zones, userAreaTint: Palette.blue, accuracy: model.tracker.accuracyCircle)
+        if let drawing {
+            DrawnShapeLayers(points: drawing)
+        } else if model.startable == nil, let here = model.fix?.coordinate {
                 // The circle "Drop anchor here" would lock.
                 MapCircle(center: here, radius: AnchorRules.clampedRadius(model.radiusMeters))
                     .foregroundStyle(Palette.blue.opacity(0.12))
                     .stroke(Palette.blue.opacity(0.6), lineWidth: 2)
+            Annotation("", coordinate: here, anchor: .bottom) {
+                Text("\(Int(AnchorRules.clampedRadius(model.radiusMeters))) m")
+                    .font(.caption2.weight(.bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Palette.blue, in: Capsule())
+                    .offset(y: -22)
+                    .accessibilityLabel("Your circle: \(Int(AnchorRules.clampedRadius(model.radiusMeters))) meters")
             }
         }
-        .mapStyle(.standard(pointsOfInterest: .excludingAll))
-        .mapControlVisibility(.hidden)
-        .onMapCameraChange(frequency: .onEnd) { context in
-            visibleRegion = context.region
-            zoomTarget = nil
-            if camera.positionedByUser { isFollowing = false }
-        }
-        .ignoresSafeArea()
     }
 
     private var topBar: some View {
@@ -90,16 +162,108 @@ struct StartView: View {
                         .glassCircle()
                 }
                 .accessibilityLabel("Settings")
-                MapZoomButtons(canZoomIn: canZoom(in: true), canZoomOut: canZoom(in: false),
-                               showsRecenter: !isFollowing, recenterLabel: "Back to where you are",
-                               zoom: zoom(in:), recenter: { recenter(force: true) })
+                zoomButtons
             }
         }
         .padding(.top, 8)
     }
 
+    private var zoomButtons: some View {
+        MapZoomButtons(canZoomIn: canZoom(in: true), canZoomOut: canZoom(in: false),
+                       showsRecenter: !isFollowing, recenterLabel: "Back to where you are",
+                       zoom: zoom(in:), recenter: { recenter(force: true) })
+    }
+
+    /// The grabber: drag down (or tap) to shrink the sheet to a bar and see the whole map.
+    private var handle: some View {
+        Capsule()
+            .fill(Palette.secondary.opacity(0.45))
+            .frame(width: 40, height: 5)
+            .frame(maxWidth: .infinity, minHeight: 28)
+            .contentShape(Rectangle())
+            .onTapGesture { isSheetCollapsed.toggle() }
+            .gesture(DragGesture(minimumDistance: 10).onEnded { drag in
+                if drag.translation.height > 40 { isSheetCollapsed = true }
+                if drag.translation.height < -40 { isSheetCollapsed = false }
+            })
+            .accessibilityElement()
+            .accessibilityLabel(isSheetCollapsed ? "Show options" : "Hide options and show the map")
+            .accessibilityAddTraits(.isButton)
+    }
+
+    /// The sheet shrunk down: the essentials in one row.
+    private var collapsedBar: some View {
+        VStack(spacing: 4) {
+            handle
+            HStack(spacing: 10) {
+                Button { isSheetCollapsed = false } label: {
+                    Label("\(model.minutes) min", systemImage: "chevron.up")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: 44)
+                }
+                .foregroundStyle(Palette.ink)
+                Spacer(minLength: 0)
+                Button(action: startDrawing) {
+                    Label("Draw", systemImage: "pencil.and.outline")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                        .background(.white.opacity(0.7), in: Capsule())
+                }
+                .foregroundStyle(Palette.blue)
+                if let here = model.startable {
+                    Button { model.startZoneSession(here.zone.id) } label: {
+                        Label("Start", systemImage: "anchor")
+                            .font(.subheadline.weight(.bold))
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 44)
+                            .background(Palette.red, in: Capsule())
+                    }
+                    .foregroundStyle(.white)
+                } else {
+                    Button(action: model.dropAnchor) {
+                        Label("Drop anchor", systemImage: "anchor")
+                            .font(.subheadline.weight(.bold))
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 44)
+                            .background(Palette.blue, in: Capsule())
+                    }
+                    .foregroundStyle(.white)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+        .glassPanel(cornerRadius: 30)
+    }
+
+    private func startDrawing() {
+        isFollowing = false
+        isSheetCollapsed = false
+        drawing = []
+    }
+
+    private func endDrawing() {
+        drawing = nil
+        recenter(force: true)
+    }
+
+    private func saveArea() {
+        guard let points = drawing else { return }
+        if let problem = model.saveDrawnArea(name: areaName, points: points) {
+            model.notice = problem.hint
+            return
+        }
+        drawing = nil
+        isFollowing = true
+        recenter()
+    }
+
     private func sheet(minutes: Binding<Int>, radius: Binding<Double>) -> some View {
         VStack(spacing: 22) {
+            handle
+                .padding(.top, -14)
+                .padding(.bottom, -12)
             // Only where you can start in a zone; otherwise the status line up top already says where you are.
             if model.startable != nil {
                 PlaceCard(place: model.place)
@@ -132,6 +296,15 @@ struct StartView: View {
                 }
                 .buttonStyle(ProminentButtonStyle())
             }
+            if !model.isFindingSpot {
+                Button(action: startDrawing) {
+                    Label("Draw your own area on the map", systemImage: "pencil.and.outline")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: 44)
+                }
+                .foregroundStyle(Palette.blue)
+                .padding(.top, -14)
+            }
         }
         .foregroundStyle(Palette.ink)
         .padding(.horizontal, 20)
@@ -156,8 +329,9 @@ struct StartView: View {
         return String(format: "%.4f,%.4f", c.latitude, c.longitude)
     }
 
-    /// How far above the map's center (as a share of its width) the visible part sits, with the sheet up.
-    private static let sheetFocusShare = 0.45
+    /// How far above the map's center (as a share of its width) the visible part sits: well up with the sheet
+    /// open, nearly centered with it down.
+    private var sheetFocusShare: Double { isSheetCollapsed || drawing != nil ? 0.08 : 0.45 }
 
     /// What following frames: the zone you're in, or you with your circle, and how wide.
     private var followTarget: (center: CLLocationCoordinate2D, span: Double)? {
@@ -180,7 +354,7 @@ struct StartView: View {
         } else if let from = zoomTarget ?? visibleRegion {
             let span = MapZoom.span(MapZoom.spanMeters(of: from), zoomingIn: zoomingIn)
             // The sheet covers the bottom: keep the part you can see in place, as following does.
-            let target = MapZoom.region(from, spanMeters: span, focusShare: Self.sheetFocusShare)
+            let target = MapZoom.region(from, spanMeters: span, focusShare: sheetFocusShare)
             zoomTarget = target
             withAnimation(.smooth(duration: 0.3)) { camera = .region(target) }
         }
@@ -196,7 +370,7 @@ struct StartView: View {
         guard isFollowing, let (center, base) = followTarget else { return }
         let span = base * zoomScale
         // The sheet covers the lower half: aim below the target so it sits in the open top part of the map.
-        let shifted = CLLocationCoordinate2D(latitude: center.latitude - span * Self.sheetFocusShare / 111_195,
+        let shifted = CLLocationCoordinate2D(latitude: center.latitude - span * sheetFocusShare / 111_195,
                                              longitude: center.longitude)
         withAnimation(.smooth(duration: 0.35)) {
             camera = .region(MKCoordinateRegion(center: shifted, latitudinalMeters: span * 1.6, longitudinalMeters: span))

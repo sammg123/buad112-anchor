@@ -57,12 +57,26 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.sammg123.anchor.tests
+  AnchorUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: AnchorUITests
+    dependencies:
+      - target: Anchor
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.sammg123.anchor.uitests
+        TEST_TARGET_NAME: Anchor
 schemes:
   Anchor:
     build:
       targets:
         Anchor: all
         AnchorTests: [test]
+        AnchorUITests: [test]
     test:
       targets:
         - AnchorTests
+        - AnchorUITests

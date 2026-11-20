@@ -906,3 +906,77 @@ struct MapZoomRegionTests {
         #expect(abs(focusBefore - focusAfter) < 1e-9)
     }
 }
+
+// MARK: - Drawn areas
+
+@Suite("Drawn areas")
+struct DrawnAreaTests {
+    private func pts(_ list: [(Double, Double)]) -> [GeoPoint] { list.map { offset(campus, $0.0, $0.1) } }
+
+    @Test("an area needs at least 3 dots, can't cross itself, and isn't tiny")
+    func validation() {
+        #expect(DrawnArea.problem(with: pts([(0, 0), (40, 0)])) == .tooFewPoints)
+        // A bow tie: the outline crosses itself.
+        #expect(DrawnArea.problem(with: pts([(0, 0), (40, 40), (40, 0), (0, 40)])) == .crossesItself)
+        #expect(DrawnArea.problem(with: pts([(0, 0), (3, 0), (0, 3)])) == .tooSmall)
+        #expect(DrawnArea.problem(with: pts([(0, 0), (40, 0), (40, 30), (0, 30)])) == nil)
+        // Concave is fine.
+        #expect(DrawnArea.problem(with: pts([(0, 0), (60, 0), (60, 20), (20, 20), (20, 50), (0, 50)])) == nil)
+    }
+
+    @Test("area in square meters")
+    func size() {
+        #expect(abs(DrawnArea.squareMeters(pts([(0, 0), (40, 0), (40, 30), (0, 30)])) - 1200) < 5)
+    }
+
+    @Test("a saved area is a whole-area zone with a watchable id and your name")
+    func zone() {
+        let zone = DrawnArea.zone(named: "  Desk by the window ", points: pts([(0, 0), (40, 0), (40, 30)]), id: "mine-abc123")
+        #expect(zone.isUserArea)
+        #expect(zone.usesWholeBuilding)
+        #expect(zone.name == "Desk by the window")
+        #expect(DrawnArea.zone(named: "", points: pts([(0, 0), (40, 0), (40, 30)]), id: "mine-x").name == "My area")
+        #expect(DrawnArea.newID().allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" })
+    }
+
+    @Test("new areas are named My area 1, 2, … skipping names in use")
+    func names() {
+        let one = DrawnArea.zone(named: "My area 1", points: pts([(0, 0), (40, 0), (40, 30)]), id: "mine-1")
+        #expect(DrawnArea.defaultName(existing: []) == "My area 1")
+        #expect(DrawnArea.defaultName(existing: [one]) == "My area 2")
+    }
+
+    @Test("saved areas survive a relaunch")
+    func stored() throws {
+        let defaults = try #require(UserDefaults(suiteName: "anchor.tests.areas"))
+        defaults.removePersistentDomain(forName: "anchor.tests.areas")
+        let store = SessionStore(defaults: defaults)
+        let area = DrawnArea.zone(named: "Desk", points: pts([(0, 0), (40, 0), (40, 30)]), id: "mine-1")
+        store.saveUserZones([area])
+        #expect(store.loadUserZones() == [area])
+    }
+
+    @Test("iOS watches at most 20 things: the library's zones and areas first, then yours in order")
+    func watchLimit() {
+        let mine = (0..<25).map { DrawnArea.zone(named: "A\($0)", points: pts([(0, 0), (40, 0), (40, 30)]), id: "mine-\($0)") }
+        let fitted = ZoneRules.watchable([library] + mine)
+        #expect(fitted.first == library)
+        #expect(fitted.count + fitted.reduce(0) { $0 + $1.studyAreas.count } <= 20)
+        #expect(fitted.count == 1 + 18)
+    }
+}
+
+@Suite("New areas")
+struct NewAreaTests {
+    @MainActor
+    @Test("a newly saved area knows you're in it right away, without waiting for another reading")
+    func immediate() {
+        let tracker = ZoneTracker(zones: [])
+        let now = Date()
+        tracker.received(LocationReading(point: campus, accuracy: 5, time: now, isSpoofed: false), at: now)
+        let area = DrawnArea.zone(named: "Desk", points: square, id: "mine-1")
+        tracker.setZones([area], at: now)
+        #expect(tracker.building(area.id, at: now) == .inside)
+        #expect(tracker.lockingZone(at: now)?.zone == area)
+    }
+}

@@ -10,6 +10,7 @@ struct SessionStore {
     private static let onboardedKey = "anchor.onboarded.v1"
     private static let arrivalsKey = "anchor.arrivals.v1"
     private static let autoStartKey = "anchor.autostart.v1"
+    private static let userZonesKey = "anchor.userzones.v1"
 
     private let defaults: UserDefaults
 
@@ -38,6 +39,10 @@ struct SessionStore {
         all[id] = date.timeIntervalSince1970
         defaults.set(all, forKey: Self.arrivalsKey)
     }
+
+    /// Areas you drew on the map.
+    func loadUserZones() -> [Zone] { load([Zone].self, key: Self.userZonesKey) ?? [] }
+    func saveUserZones(_ zones: [Zone]) { save(zones, key: Self.userZonesKey) }
 
     func loadRunning() -> Session? { load(Session.self, key: Self.runningKey) }
     func loadFinished() -> Session? { load(Session.self, key: Self.finishedKey) }

@@ -45,6 +45,10 @@ final class AppModel {
     private(set) var isPrecise = false
     /// Every zone, your cleaned-up position against each, and which study-area beacon is close.
     let tracker: ZoneTracker
+    /// Zones from the zones file (the library).
+    private let bundledZones: [Zone]
+    /// Areas you drew on the map.
+    private(set) var userZones: [Zone]
     /// Beacon mode (Settings, TestFlight only): this phone broadcasts a study area's beacon.
     let broadcaster = BeaconBroadcaster()
     /// Zones iOS says you're near (their wake circle); GPS and ranging stay on while there are any.
@@ -105,6 +109,13 @@ final class AppModel {
     #endif
 
     init() {
+        #if DEBUG
+        // UI tests: begin with no running or finished session.
+        if ProcessInfo.processInfo.arguments.contains("-freshStart") {
+            store.saveRunning(nil)
+            store.saveFinished(nil)
+        }
+        #endif
         let saved = store.loadConfig()
         minutes = saved?.studyMinutes ?? SetupInput.defaultMinutes
         library = saved?.isLibrary ?? false
@@ -113,7 +124,11 @@ final class AppModel {
         autoStart = store.autoStart
         hasOnboarded = store.hasOnboarded
         finished = store.loadFinished()
-        tracker = ZoneTracker(zones: Self.loadZones())
+        let bundled = Self.loadZones()
+        let drawn = store.loadUserZones()
+        bundledZones = bundled
+        userZones = drawn
+        tracker = ZoneTracker(zones: bundled + drawn)
         locationStatus = location.status
         isPrecise = location.isPrecise
         location.onFix = { [weak self] fix in self?.received(fix) }
@@ -123,7 +138,7 @@ final class AppModel {
         }
         beacons.onRanged = { [weak self] in self?.tracker.ranged(at: Date()) }
         startIdleTicker()
-        if tracker.zones.isEmpty { notice = "Anchor couldn't read its zones file." }
+        if bundledZones.isEmpty { Self.log.error("no zones from the zones file") }
         startZoneWatch()
         observeZoneStarts()
         screenWatcher.onChange = { [weak self] blank in self?.screenChanged(blank: blank) }
@@ -139,6 +154,7 @@ final class AppModel {
         autoStartsZone = args.contains("-autozone")
         if args.contains("-autostart"), session == nil { dropAnchor() }
         if args.contains("-fakeBeacon") { startFakeBeacon() }
+        if args.contains("-resetAreas") { setUserZones([]) }
         #endif
     }
 
@@ -247,6 +263,8 @@ final class AppModel {
             notice = "Anchor needs Location with Precise Location on. Turn them on in Settings › Anchor › Location."
             return
         }
+        // Your own area starts right away; outside it, the session simply waits as "away" until you walk in.
+        if zone.isUserArea { return begin(in: zone, areaID: nil) }
         now = Date()
         if case .locked(let areaID) = tracker.lock(for: zone, at: now) {
             begin(in: zone, areaID: areaID)
@@ -276,6 +294,30 @@ final class AppModel {
         notice = zone.usesWholeBuilding
             ? "You're not in \(zone.name) right now, so there's nothing to lock."
             : "You're not in one of \(zone.name)'s study areas right now, so there's nothing to lock."
+    }
+
+    // MARK: - Your areas
+
+    /// Saves an outline you drew; returns why it can't be saved, if it can't.
+    @discardableResult
+    func saveDrawnArea(name: String, points: [GeoPoint]) -> DrawnArea.Problem? {
+        if let problem = DrawnArea.problem(with: points) { return problem }
+        setUserZones(userZones + [DrawnArea.zone(named: name, points: points, id: DrawnArea.newID())])
+        return nil
+    }
+
+    /// Deletes areas you drew (not one a session is running in).
+    func deleteUserZones(_ ids: Set<String>) {
+        let keep = ids.subtracting([session?.area.id].compactMap { $0 })
+        setUserZones(userZones.filter { !keep.contains($0.id) })
+    }
+
+    private func setUserZones(_ zones: [Zone]) {
+        userZones = zones
+        store.saveUserZones(zones)
+        tracker.setZones(bundledZones + zones)
+        startZoneWatch()
+        updateTracking()
     }
 
     /// "Drop anchor here": a session anywhere, locked to a circle around you. It waits for a usable reading.
@@ -379,7 +421,10 @@ final class AppModel {
     /// iOS watches a circle around each zone and each study area's beacon, and wakes Anchor near them.
     private func startZoneWatch() {
         guard !Self.isRunningTests, !tracker.zones.isEmpty else { return }
-        let zones = tracker.zones
+        let zones = ZoneRules.watchable(tracker.zones)
+        if zones.count < tracker.zones.count {
+            Self.log.notice("watching \(zones.count) of \(self.tracker.zones.count) zones: iOS allows 20 conditions")
+        }
         Task {
             await ZoneWatch.shared.watch(zones) { [weak self] event in
                 Task { @MainActor in self?.zoneEvent(event) }
