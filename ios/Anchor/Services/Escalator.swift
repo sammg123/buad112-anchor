@@ -98,7 +98,7 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
 
     private func buzzOnce() {
         guard buzzing else { return }
-        AudioServicesPlayAlertSoundWithCompletion(SystemSoundID(kSystemSoundID_Vibrate)) { [weak self] in
+        AudioServicesPlayAlertSoundWithCompletion(SystemSoundID(kSystemSoundID_Vibrate)) { @Sendable [weak self] in
             Task { @MainActor in self?.buzzOnce() }
         }
     }
