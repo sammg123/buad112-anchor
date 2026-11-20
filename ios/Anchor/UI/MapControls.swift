@@ -26,10 +26,14 @@ enum MapZoom {
         region.span.longitudeDelta * 111_195 * cos(region.center.latitude * .pi / 180)
     }
 
-    /// The same center, `spanMeters` across (the height follows the screen's shape).
-    static func region(_ region: MKCoordinateRegion, spanMeters: Double) -> MKCoordinateRegion {
-        let ratio = spanMeters / max(Self.spanMeters(of: region), 1)
-        return MKCoordinateRegion(center: region.center,
+    /// The region `spanMeters` across, same shape. With `focusShare`, the point that share of a width above the
+    /// center (where you look when a sheet covers the bottom) stays put instead of the center.
+    static func region(_ region: MKCoordinateRegion, spanMeters: Double, focusShare: Double = 0) -> MKCoordinateRegion {
+        let old = max(Self.spanMeters(of: region), 1)
+        let ratio = spanMeters / old
+        let center = CLLocationCoordinate2D(latitude: region.center.latitude + (old - spanMeters) * focusShare / 111_195,
+                                            longitude: region.center.longitude)
+        return MKCoordinateRegion(center: center,
                                   span: MKCoordinateSpan(latitudeDelta: region.span.latitudeDelta * ratio,
                                                          longitudeDelta: region.span.longitudeDelta * ratio))
     }
@@ -43,6 +47,7 @@ struct MapZoomButtons: View {
     let recenterLabel: String
     let zoom: (_ zoomingIn: Bool) -> Void
     let recenter: () -> Void
+    @State private var taps = 0
 
     var body: some View {
         VStack(spacing: 8) {
@@ -59,10 +64,14 @@ struct MapZoomButtons: View {
             }
         }
         .animation(.smooth(duration: 0.25), value: showsRecenter)
+        .sensoryFeedback(.selection, trigger: taps)
     }
 
     private func button(_ symbol: String, label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            taps += 1
+            action()
+        } label: {
             Image(systemName: symbol)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(enabled ? Palette.ink : Palette.secondary.opacity(0.5))
@@ -71,7 +80,6 @@ struct MapZoomButtons: View {
         }
         .disabled(!enabled)
         .accessibilityLabel(label)
-        .sensoryFeedback(.selection, trigger: enabled)
     }
 }
 

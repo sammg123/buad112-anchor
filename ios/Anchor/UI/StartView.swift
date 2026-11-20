@@ -12,6 +12,8 @@ struct StartView: View {
     /// Your +/− zoom while it follows, as a scale on its own framing.
     @State private var zoomScale = 1.0
     @State private var visibleRegion: MKCoordinateRegion?
+    /// Where a zoom tap is heading, so a second tap mid-animation goes one step further rather than repeating.
+    @State private var zoomTarget: MKCoordinateRegion?
     @Namespace private var mapScope
 
     var body: some View {
@@ -34,10 +36,14 @@ struct StartView: View {
             // Simulator only: "-zoomTaps 2" presses + twice (negative: −) after the map settles.
             let args = ProcessInfo.processInfo.arguments
             guard let i = args.firstIndex(of: "-zoomTaps"), i + 1 < args.count, let taps = Int(args[i + 1]) else { return }
-            try? await Task.sleep(for: .seconds(6))
-            for _ in 0..<abs(taps) {
-                zoom(in: taps > 0)
-                try? await Task.sleep(for: .seconds(1))
+            do {
+                try await Task.sleep(for: .seconds(6))
+                for _ in 0..<min(abs(taps), 10) {
+                    zoom(in: taps > 0)
+                    try await Task.sleep(for: .seconds(1))
+                }
+            } catch {
+                return
             }
         }
         #endif
@@ -62,6 +68,7 @@ struct StartView: View {
         .mapControlVisibility(.hidden)
         .onMapCameraChange(frequency: .onEnd) { context in
             visibleRegion = context.region
+            zoomTarget = nil
             if camera.positionedByUser { isFollowing = false }
         }
         .ignoresSafeArea()
@@ -149,6 +156,9 @@ struct StartView: View {
         return String(format: "%.4f,%.4f", c.latitude, c.longitude)
     }
 
+    /// How far above the map's center (as a share of its width) the visible part sits, with the sheet up.
+    private static let sheetFocusShare = 0.45
+
     /// What following frames: the zone you're in, or you with your circle, and how wide.
     private var followTarget: (center: CLLocationCoordinate2D, span: Double)? {
         model.place.zone.map { ($0.center.coordinate, max($0.wakeRadiusMeters * 2, 200)) }
@@ -167,9 +177,12 @@ struct StartView: View {
         if isFollowing, let base = followTarget?.span {
             zoomScale = MapZoom.scale(zoomScale, base: base, zoomingIn: zoomingIn)
             recenter()
-        } else if let visibleRegion {
-            let span = MapZoom.span(MapZoom.spanMeters(of: visibleRegion), zoomingIn: zoomingIn)
-            withAnimation(.smooth(duration: 0.3)) { camera = .region(MapZoom.region(visibleRegion, spanMeters: span)) }
+        } else if let from = zoomTarget ?? visibleRegion {
+            let span = MapZoom.span(MapZoom.spanMeters(of: from), zoomingIn: zoomingIn)
+            // The sheet covers the bottom: keep the part you can see in place, as following does.
+            let target = MapZoom.region(from, spanMeters: span, focusShare: Self.sheetFocusShare)
+            zoomTarget = target
+            withAnimation(.smooth(duration: 0.3)) { camera = .region(target) }
         }
     }
 
@@ -183,7 +196,8 @@ struct StartView: View {
         guard isFollowing, let (center, base) = followTarget else { return }
         let span = base * zoomScale
         // The sheet covers the lower half: aim below the target so it sits in the open top part of the map.
-        let shifted = CLLocationCoordinate2D(latitude: center.latitude - span * 0.45 / 111_195, longitude: center.longitude)
+        let shifted = CLLocationCoordinate2D(latitude: center.latitude - span * Self.sheetFocusShare / 111_195,
+                                             longitude: center.longitude)
         withAnimation(.smooth(duration: 0.35)) {
             camera = .region(MKCoordinateRegion(center: shifted, latitudinalMeters: span * 1.6, longitudinalMeters: span))
         }

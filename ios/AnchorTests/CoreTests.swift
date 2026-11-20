@@ -1,4 +1,5 @@
 import Foundation
+import MapKit
 import Testing
 @testable import Anchor
 
@@ -854,5 +855,33 @@ struct MapZoomTests {
         #expect(MapZoom.scale(1, base: 400, zoomingIn: true) == 0.5)
         #expect(MapZoom.scale(1, base: 400, zoomingIn: false) == 2)
         #expect(MapZoom.scale(0.25, base: 400, zoomingIn: true) == MapZoom.minSpanMeters / 400)
+    }
+}
+
+@Suite("Map zoom regions")
+struct MapZoomRegionTests {
+    private let region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 34.02, longitude: -118.28),
+                                            span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.003))
+
+    @Test("the width in meters accounts for latitude")
+    func width() {
+        #expect(abs(MapZoom.spanMeters(of: region) - 0.003 * 111_195 * cos(34.02 * .pi / 180)) < 0.01)
+    }
+
+    @Test("zooming keeps the map's shape and, by default, its center")
+    func keepsShape() {
+        let zoomed = MapZoom.region(region, spanMeters: MapZoom.spanMeters(of: region) / 2)
+        #expect(abs(zoomed.span.latitudeDelta - 0.002) < 1e-9)
+        #expect(abs(zoomed.span.longitudeDelta - 0.0015) < 1e-9)
+        #expect(zoomed.center.latitude == region.center.latitude)
+    }
+
+    @Test("with the sheet over the bottom, the point in the open top part stays put")
+    func keepsFocus() {
+        let old = MapZoom.spanMeters(of: region)
+        let zoomed = MapZoom.region(region, spanMeters: old / 2, focusShare: 0.45)
+        let focusBefore = region.center.latitude + old * 0.45 / 111_195
+        let focusAfter = zoomed.center.latitude + (old / 2) * 0.45 / 111_195
+        #expect(abs(focusBefore - focusAfter) < 1e-9)
     }
 }

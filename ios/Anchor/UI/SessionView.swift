@@ -8,6 +8,8 @@ struct SessionView: View {
     /// The map frames your spot until you pinch, drag, or zoom it yourself.
     @State private var isFramed = true
     @State private var visibleRegion: MKCoordinateRegion?
+    /// Where a zoom tap is heading, so a second tap mid-animation goes one step further.
+    @State private var zoomTarget: MKCoordinateRegion?
     @Namespace private var mapScope
 
     var body: some View {
@@ -52,10 +54,11 @@ struct SessionView: View {
     }
 
     private func zoom(in zoomingIn: Bool) {
-        guard let visibleRegion else { return }
-        let span = MapZoom.span(MapZoom.spanMeters(of: visibleRegion), zoomingIn: zoomingIn)
+        guard let from = zoomTarget ?? visibleRegion else { return }
+        let target = MapZoom.region(from, spanMeters: MapZoom.span(MapZoom.spanMeters(of: from), zoomingIn: zoomingIn))
+        zoomTarget = target
         isFramed = false
-        withAnimation(.smooth(duration: 0.3)) { camera = .region(MapZoom.region(visibleRegion, spanMeters: span)) }
+        withAnimation(.smooth(duration: 0.3)) { camera = .region(target) }
     }
 
     private func map(_ session: Session) -> some View {
@@ -68,6 +71,7 @@ struct SessionView: View {
         .mapControlVisibility(.hidden)
         .onMapCameraChange(frequency: .onEnd) { context in
             visibleRegion = context.region
+            zoomTarget = nil
             if camera.positionedByUser { isFramed = false }
         }
         .ignoresSafeArea()
