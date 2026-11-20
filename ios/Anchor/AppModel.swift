@@ -433,7 +433,8 @@ final class AppModel {
         }
         let wasArmed = before.map { $0.isOnPhoneCounting && Escalation.isArmed(stintSeconds: $0.stintSeconds) } ?? false
         let previous = wasArmed ? before?.phoneSeconds ?? next.phoneSeconds : next.phoneSeconds
-        if Escalation.shouldVibrate(from: previous, to: next.phoneSeconds) { escalator.vibrate() }
+        // Library mode too: it is vibration only, and the vibration never stops while the pickup counts.
+        escalator.startBuzzing()
         guard !next.config.isLibrary else { return }
         if let mark = Escalation.voiceMark(from: previous, to: next.phoneSeconds) {
             escalator.speak(Escalation.spokenLine(seconds: mark))

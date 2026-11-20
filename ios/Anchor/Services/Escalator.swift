@@ -16,6 +16,7 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
     private var alarm: AVAudioPlayer?
     private var wantsKeepAlive = false
     private var wantsAlarm = false
+    private var buzzing = false
     private var interruptionObserver: NSObjectProtocol?
     private var resetObserver: NSObjectProtocol?
 
@@ -87,8 +88,24 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
         AudioServicesPlayAlertSound(SystemSoundID(kSystemSoundID_Vibrate))
     }
 
-    /// Voice and alarm off; the keep-alive track keeps playing.
+    /// Nonstop vibration while a pickup counts (Sam 11-20: "literally consistently buzz while my phone is open"):
+    /// each buzz starts the next the moment it ends, until `stopEscalation`. Safe to call every tick.
+    func startBuzzing() {
+        guard !buzzing else { return }
+        buzzing = true
+        buzzOnce()
+    }
+
+    private func buzzOnce() {
+        guard buzzing else { return }
+        AudioServicesPlayAlertSoundWithCompletion(SystemSoundID(kSystemSoundID_Vibrate)) { [weak self] in
+            Task { @MainActor in self?.buzzOnce() }
+        }
+    }
+
+    /// Voice, alarm and the nonstop buzz off; the keep-alive track keeps playing.
     func stopEscalation() {
+        buzzing = false
         guard wantsAlarm || alarm != nil || speech.isSpeaking else { return }
         wantsAlarm = false
         alarm?.stop()

@@ -1,8 +1,9 @@
 import CoreLocation
 import os
 
-/// GPS for the anchor. During a session it keeps running in the background (blue pill in the status bar),
-/// which also keeps Anchor alive to see the phone lock and unlock.
+/// GPS for the anchor. During a session it keeps running in the background, which also keeps Anchor alive to see
+/// the phone lock and unlock. With Always access no blue location arrow shows (Sam 11-20: the island shows the
+/// anchor, not iOS's arrow); with While Using, iOS requires the arrow and shows it anyway.
 @MainActor
 final class LocationService: NSObject, CLLocationManagerDelegate {
     private nonisolated static let log = Logger(subsystem: "com.sammg123.anchor", category: "location")
@@ -40,9 +41,11 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     }
 
     func startSession() {
-        backgroundSession = CLBackgroundActivitySession()
+        // While Using needs a background activity session to keep updating, and iOS then shows its arrow.
+        // Always needs neither, so the Dynamic Island keeps Anchor's own badge.
+        backgroundSession = manager.authorizationStatus == .authorizedAlways ? nil : CLBackgroundActivitySession()
         manager.allowsBackgroundLocationUpdates = true
-        manager.showsBackgroundLocationIndicator = true
+        manager.showsBackgroundLocationIndicator = false
         manager.startUpdatingLocation()
         // With Always access, relaunches Anchor if iOS ends it mid-session.
         if CLLocationManager.significantLocationChangeMonitoringAvailable() {

@@ -82,13 +82,6 @@ enum Escalation {
         stintSeconds >= Ladder.minFirstDelaySeconds
     }
 
-    /// Anchor vibrates the phone itself on every buzz time, and every second once the alarm stage is reached.
-    static func shouldVibrate(from previous: Double, to current: Double) -> Bool {
-        guard current > previous else { return false }
-        if Ladder.buzzCount(phoneSeconds: current) > Ladder.buzzCount(phoneSeconds: previous) { return true }
-        return isAlarm(phoneSeconds: current) && current.rounded(.down) > previous.rounded(.down)
-    }
-
     static func isAlarm(phoneSeconds: Double) -> Bool {
         phoneSeconds >= alarmAfterSeconds
     }

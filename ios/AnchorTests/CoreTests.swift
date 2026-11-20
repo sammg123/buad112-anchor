@@ -388,18 +388,10 @@ struct DeadReckoningTests {
 
 @Suite("Vibration and volume")
 struct VibrationVolumeTests {
-    @Test("vibrates on every buzz time the phone clock passes")
-    func vibratesOnBuzz() {
-        #expect(!Escalation.shouldVibrate(from: 10, to: 14))
-        #expect(Escalation.shouldVibrate(from: 14, to: 15.2))
-        #expect(Escalation.shouldVibrate(from: 64, to: 65.5))
-        #expect(!Escalation.shouldVibrate(from: 65.5, to: 66.4))
-    }
-
-    @Test("from the alarm stage it vibrates every second")
-    func vibratesConstantlyAtAlarm() {
-        #expect(Escalation.shouldVibrate(from: 121, to: 122))
-        #expect(!Escalation.shouldVibrate(from: 122, to: 122))
+    @Test("the nonstop buzz starts the moment a pickup counts, from its first second")
+    func buzzesFromTheStart() {
+        #expect(Escalation.isArmed(stintSeconds: 0))
+        #expect(Escalation.isArmed(stintSeconds: 0.5))
     }
 
     @Test("volume can't go below 3 of 16 notches")
