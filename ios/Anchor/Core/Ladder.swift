@@ -82,6 +82,13 @@ enum Escalation {
         stintSeconds >= Ladder.minFirstDelaySeconds
     }
 
+    /// Anchor vibrates the phone itself on every buzz time, and every second once the alarm stage is reached.
+    static func shouldVibrate(from previous: Double, to current: Double) -> Bool {
+        guard current > previous else { return false }
+        if Ladder.buzzCount(phoneSeconds: current) > Ladder.buzzCount(phoneSeconds: previous) { return true }
+        return isAlarm(phoneSeconds: current) && current.rounded(.down) > previous.rounded(.down)
+    }
+
     static func isAlarm(phoneSeconds: Double) -> Bool {
         phoneSeconds >= alarmAfterSeconds
     }
@@ -94,5 +101,15 @@ enum Escalation {
             s > 0 ? "\(s) second\(s == 1 ? "" : "s")" : nil
         ].compactMap { $0 }
         return "\(parts.joined(separator: " ")) on your phone. Put it down."
+    }
+}
+
+/// The volume floor during a session (outside library mode): 3 of the 16 volume notches.
+enum VolumeRule {
+    static let floor: Float = 3.0 / 16
+
+    /// The volume to force back to, or nil when the current one is fine.
+    static func corrected(_ volume: Float) -> Float? {
+        volume < floor - 0.001 ? floor : nil
     }
 }

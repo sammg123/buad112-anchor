@@ -63,6 +63,7 @@ struct StartView: View {
         VStack(spacing: 22) {
             MinutePicker(minutes: minutes)
             RadiusSlider(radius: radius)
+            LibraryToggle()
             if !model.notificationsAllowed || !model.hasPasscode {
                 warning
             }
@@ -200,5 +201,22 @@ private struct FindingSpot: View {
     private var text: String {
         guard let fix = model.fix, fix.horizontalAccuracy >= 0 else { return "Finding your spot…" }
         return "Finding your spot… GPS within \(Format.meters(fix.horizontalAccuracy))"
+    }
+}
+
+private struct LibraryToggle: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        Toggle(isOn: $model.library) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Library mode").font(.subheadline.weight(.semibold))
+                Text(model.library ? "Vibration only. No voice, alarm or sound." : "Off: voice, alarm, and volume stays up.")
+                    .font(.footnote)
+                    .foregroundStyle(Palette.secondary)
+            }
+        }
+        .tint(Palette.blue)
     }
 }

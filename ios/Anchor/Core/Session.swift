@@ -7,6 +7,18 @@ struct SessionConfig: Codable, Equatable, Sendable {
     let radiusMeters: Double
     /// Run the "Anchor Gray" shortcut at the start and "Anchor Color" at the end.
     let grayscale: Bool
+    /// Library mode: vibration only, no voice, alarm or sound, and no volume floor. Optional so settings saved
+    /// before it existed still load.
+    let library: Bool?
+
+    init(studyMinutes: Int, radiusMeters: Double, grayscale: Bool, library: Bool = false) {
+        self.studyMinutes = studyMinutes
+        self.radiusMeters = radiusMeters
+        self.grayscale = grayscale
+        self.library = library
+    }
+
+    var isLibrary: Bool { library ?? false }
 }
 
 /// One study session. A value: every change returns a new Session.

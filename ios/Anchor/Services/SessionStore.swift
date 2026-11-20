@@ -30,6 +30,8 @@ struct SessionStore {
     func saveConfig(_ config: SessionConfig) { save(config, key: Self.configKey) }
     func loadWalked() -> DeadReckoning? { load(DeadReckoning.self, key: Self.walkedKey) }
     func saveWalked(_ position: DeadReckoning?) { save(position, key: Self.walkedKey) }
+    func loadHeading() -> Double? { load(Double.self, key: Self.walkedKey + ".heading") }
+    func saveHeading(_ heading: Double?) { save(heading, key: Self.walkedKey + ".heading") }
 
     private func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
         guard let data = defaults.data(forKey: key) else { return nil }

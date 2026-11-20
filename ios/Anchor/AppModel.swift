@@ -54,6 +54,7 @@ final class AppModel {
     var minutes: Int { didSet { savePreferences() } }
     var radiusMeters: Double { didSet { savePreferences() } }
     var grayscale: Bool { didSet { savePreferences() } }
+    var library: Bool { didSet { savePreferences() } }
     var notice: String?
 
     private let store = SessionStore()
@@ -62,9 +63,13 @@ final class AppModel {
     private let escalator = Escalator()
     private let liveActivity = LiveActivityController()
     private let motion = MotionTracker()
+    let volumeGuard = VolumeGuard()
     /// Launched in the background (iOS relaunching a session), Anchor is not on screen until a scene says so.
     private var isAppActive = UIApplication.shared.applicationState != .background
     private var isDeviceUnlocked = true
+    private var lastLockNotice = Date.distantPast
+    /// After a lock notice, iOS can still say "unlocked" for a moment; only believe it again after this long.
+    private static let relockQuietSeconds = 15.0
     private var shortcutGraceUntil = Date.distantPast
     private var pendingConfig: SessionConfig?
     /// The session ended in the background in black and white; color comes back when Anchor is opened.
@@ -78,6 +83,7 @@ final class AppModel {
         minutes = saved?.studyMinutes ?? SetupInput.defaultMinutes
         radiusMeters = AnchorRules.clampedRadius(saved?.radiusMeters ?? AnchorRules.defaultRadiusMeters)
         grayscale = saved?.grayscale ?? false
+        library = saved?.isLibrary ?? false
         hasOnboarded = store.hasOnboarded
         finished = store.loadFinished()
         locationStatus = location.status
@@ -121,7 +127,7 @@ final class AppModel {
     var isStopUnlocked: Bool { session?.away ?? false }
 
     /// Steps decide when they can; GPS is the fallback.
-    var usesSteps: Bool { motionAllowed && MotionTracker.isSupported }
+    var usesSteps: Bool { motionAllowed && motion.isRunning }
 
     /// How much farther to walk before Stop unlocks.
     var metersToUnlock: Double? {
@@ -143,6 +149,7 @@ final class AppModel {
     func requestMotion() async {
         _ = await motion.requestPermission()
         motionAllowed = MotionTracker.isAuthorized
+        if motionAllowed, session != nil, !motion.isRunning { motion.start(from: walked, heading: 0) }
     }
 
     var motionDenied: Bool { MotionTracker.isDenied }
@@ -172,7 +179,7 @@ final class AppModel {
             return
         }
         let config = SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),
-                                   grayscale: grayscale)
+                                   grayscale: grayscale, library: library)
         if let fix, isUsableAnchor(fix) {
             begin(config, at: fix)
         } else {
@@ -261,6 +268,7 @@ final class AppModel {
     /// iOS says "locked" about 10 s after the fact; those seconds were not phone time.
     private func deviceLocked() {
         isDeviceUnlocked = false
+        lastLockNotice = Date()
         guard let current = session, current.onPhone else { return reconcile() }
         apply(current.lockedPhone(at: Date(), unseenSeconds: Ladder.lockLagSeconds))
     }
@@ -277,8 +285,9 @@ final class AppModel {
         walked = .origin
         store.saveWalked(.origin)
         location.startSession()
-        motion.start(from: .origin)
+        motion.start(from: .origin, heading: 0)
         escalator.startKeepAlive()
+        volumeGuard.setEnforcing(!config.isLibrary)
         startTicker()
         apply(started)
         liveActivity.start(for: started, at: Date())
@@ -298,8 +307,9 @@ final class AppModel {
         liveActivity.adoptExisting()
         walked = store.loadWalked() ?? .origin
         location.startSession()
-        motion.start(from: walked)
+        motion.start(from: walked, heading: store.loadHeading() ?? 0)
         escalator.startKeepAlive()
+        volumeGuard.setEnforcing(!saved.config.isLibrary)
         startTicker()
         apply(resumed)
     }
@@ -322,8 +332,8 @@ final class AppModel {
         } else if let away = isAway() {
             next = next.settingAway(away, at: now)
         }
-        // In case an unlock notice was missed, ask iOS directly (it only ever says "available" when unlocked).
-        if !isDeviceUnlocked, UIApplication.shared.isProtectedDataAvailable { isDeviceUnlocked = true }
+        syncLockState()
+        escalator.keepPlaying()
         let onPhone = !isAppActive && isDeviceUnlocked && now >= shortcutGraceUntil
         next = next.settingPhone(onPhone, at: now).advanced(to: now)
         apply(next)
@@ -359,7 +369,8 @@ final class AppModel {
         if next.isOnPhoneCounting {
             let runningLow = next.phoneSeconds >= buzzer.scheduledThroughSeconds - Self.ladderRefillSeconds
             if !wasCounting || runningLow {
-                buzzer.scheduleLadder(phoneSeconds: next.phoneSeconds, stintSeconds: next.stintSeconds)
+                buzzer.scheduleLadder(phoneSeconds: next.phoneSeconds, stintSeconds: next.stintSeconds,
+                                      silent: next.config.isLibrary)
             }
         } else if wasCounting {
             buzzer.cancelLadder()
@@ -375,6 +386,8 @@ final class AppModel {
         }
         let wasArmed = before.map { $0.isOnPhoneCounting && Escalation.isArmed(stintSeconds: $0.stintSeconds) } ?? false
         let previous = wasArmed ? before?.phoneSeconds ?? next.phoneSeconds : next.phoneSeconds
+        if Escalation.shouldVibrate(from: previous, to: next.phoneSeconds) { escalator.vibrate() }
+        guard !next.config.isLibrary else { return }
         if let mark = Escalation.voiceMark(from: previous, to: next.phoneSeconds) {
             escalator.speak(Escalation.spokenLine(seconds: mark))
         }
@@ -398,6 +411,7 @@ final class AppModel {
         buzzer.cancelLadder()
         buzzer.clearBadge()
         escalator.stopEverything()
+        volumeGuard.setEnforcing(false)
         motion.stop()
         store.saveWalked(nil)
         liveActivity.end()
@@ -412,13 +426,26 @@ final class AppModel {
     }
 
     private func savePreferences() {
-        store.saveConfig(SessionConfig(studyMinutes: minutes, radiusMeters: radiusMeters, grayscale: grayscale))
+        store.saveConfig(SessionConfig(studyMinutes: minutes, radiusMeters: radiusMeters, grayscale: grayscale,
+                                       library: library))
     }
 
     // MARK: - Location rules
 
     private func isUsableAnchor(_ fix: CLLocation) -> Bool {
         AnchorRules.isUsableAnchor(accuracy: fix.horizontalAccuracy, age: -fix.timestamp.timeIntervalSinceNow)
+    }
+
+    /// In case a lock or unlock notice was missed, ask iOS directly. Right after a lock notice its answer can lag,
+    /// so "unlocked" is only believed after a quiet spell. Without a passcode iOS always says unlocked: skip it.
+    private func syncLockState() {
+        guard hasPasscode else { return }
+        let available = UIApplication.shared.isProtectedDataAvailable
+        if isDeviceUnlocked, !available {
+            isDeviceUnlocked = false
+        } else if !isDeviceUnlocked, available, now.timeIntervalSince(lastLockNotice) > Self.relockQuietSeconds {
+            isDeviceUnlocked = true
+        }
     }
 
     /// Steps first, sharp GPS second; nil when neither can decide.
@@ -437,6 +464,7 @@ final class AppModel {
     private func stepped(to position: DeadReckoning) {
         walked = position
         store.saveWalked(position)
+        store.saveHeading(motion.heading)
         reconcile()
     }
 }

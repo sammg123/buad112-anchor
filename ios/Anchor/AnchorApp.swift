@@ -36,6 +36,7 @@ struct RootView: View {
                 if let finished = model.finished { DoneView(session: finished) }
             }
         }
+        .background { VolumeHost(guardian: model.volumeGuard).frame(width: 1, height: 1).accessibilityHidden(true) }
         .animation(.smooth(duration: 0.35), value: model.screen)
         .preferredColorScheme(.light)
         .alert("Anchor", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {

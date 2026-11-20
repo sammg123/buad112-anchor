@@ -387,3 +387,39 @@ struct DeadReckoningTests {
         #expect(!AnchorRules.isAwayCombined(motion: nil, gpsDistance: 60, gpsAccuracy: 40, radius: 25))
     }
 }
+
+// MARK: - Vibration, volume, library mode
+
+@Suite("Vibration and volume")
+struct VibrationVolumeTests {
+    @Test("vibrates on every buzz time the phone clock passes")
+    func vibratesOnBuzz() {
+        #expect(!Escalation.shouldVibrate(from: 10, to: 14))
+        #expect(Escalation.shouldVibrate(from: 14, to: 15.2))
+        #expect(Escalation.shouldVibrate(from: 64, to: 65.5))
+        #expect(!Escalation.shouldVibrate(from: 65.5, to: 66.4))
+    }
+
+    @Test("from the alarm stage it vibrates every second")
+    func vibratesConstantlyAtAlarm() {
+        #expect(Escalation.shouldVibrate(from: 121, to: 122))
+        #expect(!Escalation.shouldVibrate(from: 122, to: 122))
+    }
+
+    @Test("volume can't go below 3 of 16 notches")
+    func volumeFloor() {
+        #expect(VolumeRule.floor == 3.0 / 16)
+        #expect(VolumeRule.corrected(0) == VolumeRule.floor)
+        #expect(VolumeRule.corrected(0.12) == VolumeRule.floor)
+        #expect(VolumeRule.corrected(0.19) == nil)
+        #expect(VolumeRule.corrected(1) == nil)
+    }
+
+    @Test("library mode is off unless chosen, and old saved settings still load")
+    func libraryDefault() throws {
+        let old = #"{"studyMinutes":45,"radiusMeters":25,"grayscale":false}"#.data(using: .utf8)!
+        let config = try JSONDecoder().decode(SessionConfig.self, from: old)
+        #expect(!config.isLibrary)
+        #expect(SessionConfig(studyMinutes: 45, radiusMeters: 25, grayscale: false, library: true).isLibrary)
+    }
+}

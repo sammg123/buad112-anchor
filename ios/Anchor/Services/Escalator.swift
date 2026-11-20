@@ -1,3 +1,4 @@
+import AudioToolbox
 import AVFoundation
 import os
 
@@ -16,6 +17,7 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
     private var wantsKeepAlive = false
     private var wantsAlarm = false
     private var interruptionObserver: NSObjectProtocol?
+    private var resetObserver: NSObjectProtocol?
 
     override init() {
         super.init()
@@ -27,6 +29,18 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
                 .flatMap(AVAudioSession.InterruptionType.init(rawValue:)) == .ended
             MainActor.assumeIsolated { if ended { self?.resumeAfterInterruption() } }
         }
+        resetObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resumeAfterInterruption() }
+        }
+    }
+
+    /// Called every second: anything that should be playing but stopped (route change, interruption with no
+    /// "ended", a failed start) is started again.
+    func keepPlaying() {
+        if wantsKeepAlive, keepAlive?.isPlaying != true { keepAlive = loop("silence", volume: 1) }
+        if wantsAlarm, alarm?.isPlaying != true { alarm = loop("alarm", volume: 1) }
     }
 
     // MARK: - Session lifetime
@@ -66,6 +80,11 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
             alarm = nil
             release()
         }
+    }
+
+    /// One strong buzz. Works from the background because Anchor's audio session is running.
+    func vibrate() {
+        AudioServicesPlayAlertSound(SystemSoundID(kSystemSoundID_Vibrate))
     }
 
     /// Voice and alarm off; the keep-alive track keeps playing.

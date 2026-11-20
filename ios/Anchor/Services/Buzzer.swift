@@ -31,7 +31,7 @@ final class Buzzer {
     }
 
     /// Replace any pending ladder with one that starts at the next buzz after `phoneSeconds`.
-    func scheduleLadder(phoneSeconds: Double, stintSeconds: Double) {
+    func scheduleLadder(phoneSeconds: Double, stintSeconds: Double, silent: Bool) {
         cancelLadder(clearDelivered: false)
         let buzzes = Ladder.buzzes(phoneSeconds: phoneSeconds, stintSeconds: stintSeconds, limit: Ladder.maxPending)
         scheduledThroughSeconds = phoneSeconds + (buzzes.last?.delay ?? 0)
@@ -39,7 +39,8 @@ final class Buzzer {
             let content = UNMutableNotificationContent()
             content.title = buzz.title
             content.body = buzz.body
-            content.sound = .default
+            // Library mode: no sound; Anchor vibrates the phone itself.
+            content.sound = silent ? nil : .default
             content.threadIdentifier = Self.thread
             // Time Sensitive breaks through a Focus, which is exactly when a student would study.
             content.interruptionLevel = .timeSensitive
@@ -56,7 +57,7 @@ final class Buzzer {
     }
 
     func clearBadge() {
-        center.setBadgeCount(0) { error in
+        center.setBadgeCount(0) { @Sendable error in
             if let error { Self.log.error("badge reset failed: \(error.localizedDescription, privacy: .public)") }
         }
     }
@@ -89,7 +90,7 @@ final class Buzzer {
     private func add(_ request: UNNotificationRequest) {
         let id = request.identifier
         let log = Self.log
-        center.add(request) { error in
+        center.add(request) { @Sendable error in
             if let error {
                 log.error("could not schedule \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }

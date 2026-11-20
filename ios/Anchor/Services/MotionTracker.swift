@@ -9,7 +9,8 @@ final class MotionTracker {
     private static let sampleInterval = 1.0 / 25
     /// A gap longer than this between gyro samples (Anchor was not running) is not integrated.
     private static let maxSampleGap = 0.25
-    private static let maxSamples = 3_000
+    /// Only the last few seconds of turning count for a pedometer report: that is when those steps happened.
+    private static let maxSamples = 75
 
     var onUpdate: ((DeadReckoning) -> Void)?
     private(set) var position = DeadReckoning.origin
@@ -17,7 +18,7 @@ final class MotionTracker {
 
     private let motion = CMMotionManager()
     private let pedometer = CMPedometer()
-    private var heading = 0.0
+    private(set) var heading = 0.0
     private var headings: [Double] = []
     private var lastSampleTime: TimeInterval?
     private var lastPedometerMeters = 0.0
@@ -34,23 +35,24 @@ final class MotionTracker {
         guard Self.isSupported else { return false }
         let now = Date()
         return await withCheckedContinuation { continuation in
-            pedometer.queryPedometerData(from: now.addingTimeInterval(-60), to: now) { _, error in
+            pedometer.queryPedometerData(from: now.addingTimeInterval(-60), to: now) { @Sendable _, error in
                 continuation.resume(returning: error == nil)
             }
         }
     }
 
-    func start(from start: DeadReckoning) {
+    /// `heading` continues the frame a saved position was laid in.
+    func start(from start: DeadReckoning, heading startHeading: Double) {
         stop()
         guard Self.isSupported, motion.isDeviceMotionAvailable else { return }
         position = start
-        heading = 0
+        heading = startHeading
         headings = []
         lastSampleTime = nil
         lastPedometerMeters = 0
         isRunning = true
         motion.deviceMotionUpdateInterval = Self.sampleInterval
-        motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, error in
+        motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { @Sendable [weak self] data, error in
             if let error { Self.log.error("device motion: \(error.localizedDescription, privacy: .public)") }
             guard let data else { return }
             let r = data.rotationRate, g = data.gravity
@@ -58,7 +60,7 @@ final class MotionTracker {
             let time = data.timestamp
             MainActor.assumeIsolated { self?.turned(rate: rate, at: time) }
         }
-        pedometer.startUpdates(from: Date()) { [weak self] data, error in
+        pedometer.startUpdates(from: Date()) { @Sendable [weak self] data, error in
             if let error { Self.log.error("pedometer: \(error.localizedDescription, privacy: .public)") }
             guard let meters = data?.distance?.doubleValue else { return }
             Task { @MainActor in self?.walked(totalMeters: meters) }
@@ -87,9 +89,9 @@ final class MotionTracker {
     private func walked(totalMeters: Double) {
         let stretch = totalMeters - lastPedometerMeters
         lastPedometerMeters = totalMeters
-        guard stretch > 0 else { return }
         let direction = Turning.circularMean(headings) ?? heading
         headings = [heading]
+        guard stretch > 0 else { return }
         position = position.walking(stretch, heading: direction)
         onUpdate?(position)
     }
