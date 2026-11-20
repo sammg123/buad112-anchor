@@ -32,6 +32,12 @@ final class ZoneTracker {
     @discardableResult
     func received(_ reading: LocationReading, at now: Date) -> ReadingVerdict {
         let verdict = LocationFilter.verdict(for: reading, at: now)
+        if verdict == .tooInaccurate, LocationFilter.isExitEvidence(accuracy: reading.accuracy) {
+            buildings = Dictionary(uniqueKeysWithValues: allZones.map { zone in
+                let fit = ZoneGeometry.fit(center: reading.point, radius: reading.accuracy, in: zone.polygon)
+                return (zone.id, (buildings[zone.id] ?? .unknown).updatedRough(with: fit, at: now))
+            })
+        }
         guard verdict == .use else { return verdict }
         let next = filter.adding(reading)
         guard let estimate = next.estimate, next != filter else { return verdict }
@@ -53,12 +59,18 @@ final class ZoneTracker {
         areas = areas.sighted(key, proximity: proximity, accuracy: accuracy, at: now)
     }
 
+    /// Ranging reported (possibly no beacons at all).
+    func ranged(at now: Date) {
+        areas = areas.ranged(at: now)
+    }
+
     func building(_ zoneID: String, at now: Date) -> BuildingPresence.State {
         buildings[zoneID]?.state(at: now) ?? .unknown
     }
 
     func lock(for zone: Zone, at now: Date) -> ZoneLock {
-        ZoneRules.lock(zone: zone, building: building(zone.id, at: now), areaID: areas.current(in: zone.id, at: now))
+        ZoneRules.lock(zone: zone, building: building(zone.id, at: now), areaID: areas.current(in: zone.id, at: now),
+                       rangingLive: areas.isRangingLive(at: now))
     }
 
     /// The first zone that locks right now, with its study area.

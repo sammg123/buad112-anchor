@@ -73,7 +73,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
 
     private func apply() {
         let background = isInSession || isNearZone
-        manager.desiredAccuracy = background ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
+        // Navigation accuracy (the most battery) only during a session; near a zone, best is enough to notice arrival.
+        manager.desiredAccuracy = isInSession ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
         if background {
             // While Using needs a background activity session to keep updating, and iOS then shows its arrow.
             if backgroundSession == nil, manager.authorizationStatus != .authorizedAlways {

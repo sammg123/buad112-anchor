@@ -109,22 +109,31 @@ to show the graded cover.
 
 A native version for the phone itself, shipped through TestFlight.
 
-- **No-phone zones** (`ios/Anchor/Resources/zones.json`): flat outlines on the map, Lime-style; floors don't count.
-  Leavey Library ships first (building outline from OpenStreetMap, ODbL). iOS watches a circle around each zone and
-  wakes Anchor on arrival (Location: Always) with a "You're at Leavey Library · Start" notice; inside a zone the
-  start screen offers "Start in <zone>". Anywhere else, *Drop anchor here* makes a circle zone of the chosen radius
-  (25 m minimum). A session runs for your saved minutes.
-- **In or out is location only.** GPS readings worse than 65 m are dropped, jumps nobody could walk are rejected,
-  and the last 30 s are averaged (sharper readings count more). Leaving takes being outside by more than the GPS
-  accuracy (at least 15 m) for 15 s, and never starts while iOS's motion activity says the phone is sitting still
-  (that's drift). Coming back takes 5 s inside. Step counting was removed: shaking a phone can fake steps.
+- **No-phone zones** (`ios/Anchor/Resources/Zones.json`), Lime-style: each zone is a building outline (flat;
+  floors don't count) plus its study areas, each found by a Bluetooth beacon. In the building near a study-area
+  beacon locks the phone; the lobby, the café and outside are free; a zone with no study areas is the whole
+  building. Leavey Library ships first (outline from OpenStreetMap, ODbL); its study areas and beacon ids are
+  placeholders until real beacons are placed. A session runs for your saved minutes.
+- **GPS**: Precise Location is required. Readings worse than 20 m, older than 5 s, invalid, or faked
+  (`isSimulatedBySoftware` / `isProducedByAccessory`) are dropped; the rest go through a small Kalman filter. Each
+  reading is a circle of its accuracy: mostly inside the outline counts as in; out needs the whole circle outside for
+  3 readings in a row and 10 s. A faked reading during a session keeps you in and is counted on the summary.
+  Constants live in `Core/LocationFilter.swift` and `Core/Presence.swift`.
+- **Beacons**: in a study area when its beacon ranges `.immediate`/`.near`, or `.far` under 8 m; left after 15 s
+  without one. Because indoor GPS often can't prove you're inside, a close beacon is enough unless GPS is sure
+  you're outside the building.
+- **Waking up**: `CLMonitor` watches the smallest circle around each building plus 30 m (at least 100 m) and each
+  study area's beacon, so iOS wakes Anchor on arrival even when it's closed (Location: Always). Arriving sends
+  "You're in Leavey Library: Study Room 2" with a Start button, or starts by itself with **Auto-start** on.
+- **Beacon mode** (Settings › Developer, TestFlight builds): a spare iPhone broadcasts a study area's beacon for
+  demos, only while that screen is open.
 - **On your phone** means the phone is unlocked while Anchor is not on screen, at your spot, past the grace period.
   The study timer freezes and the phone clock runs (it never resets during a session). Escalation, in phone time:
   0:00 the Lock Screen / Dynamic Island Live Activity turns red and one buzz; from 0:15 a Time Sensitive
   notification every 15 s (every 5 s after 1:00); from 0:30 nonstop vibration and a voice reading your phone
   time; from 1:00 a looping siren. Locking the phone or opening Anchor stops all of it. Settings lists every step.
-- **Away** (outside the zone): the phone is free, nothing counts, and Stop unlocks. Location and Motion & Fitness
-  are both required to start.
+- **Away** (outside the zone): the phone is free, nothing counts, and Stop unlocks. Location (Always, Precise) is
+  required to start.
 - **Grace period** (start screen, 0-60 s, default 10): unlocking only counts as being on your phone after this long
   out of Anchor, so checking the timer on the Lock Screen is free. iOS does not tell apps whether you are on the
   unlocked Lock Screen or the home screen, so time is the only signal. The screen turning off ends a pickup at once.

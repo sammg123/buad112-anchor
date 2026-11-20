@@ -37,6 +37,9 @@ struct LocationFilter: Equatable, Sendable {
     static let maxAgeSeconds = 5.0
     /// How fast the true position can drift between readings, in meters per second.
     static let processSpeed = 3.0
+    /// A reading too rough for the filter still proves you left when its whole circle is outside the building,
+    /// up to this accuracy (so an outdoor walk with poor GPS can't keep you locked in).
+    static let maxExitEvidenceAccuracyMeters = 65.0
 
     let estimate: LocationEstimate?
 
@@ -50,6 +53,11 @@ struct LocationFilter: Equatable, Sendable {
         if reading.accuracy > maxAccuracyMeters { return .tooInaccurate }
         if now.timeIntervalSince(reading.time) > maxAgeSeconds { return .tooOld }
         return .use
+    }
+
+    /// Whether a reading the filter threw out as too rough can still count toward leaving.
+    static func isExitEvidence(accuracy: Double) -> Bool {
+        accuracy > 0 && accuracy <= maxExitEvidenceAccuracyMeters
     }
 
     /// Takes a reading that passed `verdict`; one older than the current estimate is ignored.

@@ -213,8 +213,13 @@ enum ZoneGeometry {
 ///   "studyAreas": [{"id", "name", "floor", "beacon": {"uuid", "major", "minor"}}]}]}`.
 /// Bundled for now; the same shape can come from a server later (see `ZoneStore`).
 enum ZoneCatalog {
+    /// iOS watches at most 20 conditions per app: one per zone plus one per study area.
+    static let maxWatched = 20
+
     enum Problem: Error, Equatable {
         case empty
+        case tooManyToWatch
+        case badID(String)
         case badOutline(String)
         case duplicateArea(String)
         case duplicateBeacon(String)
@@ -236,11 +241,20 @@ enum ZoneCatalog {
         let file = try JSONDecoder().decode(File.self, from: data)
         guard !file.zones.isEmpty else { throw Problem.empty }
         let zones = try file.zones.map(zone(from:))
+        guard zones.count + zones.reduce(0, { $0 + $1.studyAreas.count }) <= maxWatched else { throw Problem.tooManyToWatch }
+        if let bad = (zones.map(\.id) + zones.flatMap { $0.studyAreas.map(\.id) }).first(where: { !isSafeID($0) }) {
+            throw Problem.badID(bad)
+        }
         var beacons = Set<BeaconID>()
         for area in zones.flatMap(\.studyAreas) where !beacons.insert(area.beacon).inserted {
             throw Problem.duplicateBeacon(area.id)
         }
         return zones
+    }
+
+    /// Ids end up inside the watch's condition names: letters, digits, "-" and "_" only.
+    private static func isSafeID(_ id: String) -> Bool {
+        !id.isEmpty && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
     }
 
     private static func zone(from record: Record) throws -> Zone {

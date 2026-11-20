@@ -88,6 +88,10 @@ final class AppModel {
     private var shortcutGraceUntil = Date.distantPast
     /// A zone start (from the arrival notice) waiting until being in the zone is confirmed.
     private var pendingZoneID: String?
+    /// Which start attempt the 20 s give-up belongs to, so an older one can't cancel a newer one.
+    private var pendingAttempt: UUID?
+    /// Keeps `now` (and the start screen) current with no session running.
+    private var idleTicker: Timer?
     /// The session ended in the background in black and white; color comes back when Anchor is opened.
     private var needsColorBack = false
     private var lastSaved = Date.distantPast
@@ -115,6 +119,8 @@ final class AppModel {
         beacons.onSighting = { [weak self] area, proximity, accuracy in
             self?.sighted(area, proximity: proximity, accuracy: accuracy)
         }
+        beacons.onRanged = { [weak self] in self?.tracker.ranged(at: Date()) }
+        startIdleTicker()
         if tracker.zones.isEmpty { notice = "Anchor couldn't read its zones file." }
         startZoneWatch()
         observeZoneStarts()
@@ -228,12 +234,14 @@ final class AppModel {
             return
         }
         pendingZoneID = zone.id
+        let attempt = UUID()
+        pendingAttempt = attempt
         isFindingSpot = true
         location.refresh()
         updateTracking()
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.confirmZoneSeconds))
-            self?.givePendingUp(zone)
+            self?.givePendingUp(zone, attempt: attempt)
         }
     }
 
@@ -243,8 +251,8 @@ final class AppModel {
         begin(in: zone, areaID: areaID)
     }
 
-    private func givePendingUp(_ zone: Zone) {
-        guard pendingZoneID == zone.id, session == nil else { return }
+    private func givePendingUp(_ zone: Zone, attempt: UUID) {
+        guard pendingZoneID == zone.id, pendingAttempt == attempt, session == nil else { return }
         cancelFindingSpot()
         notice = zone.usesWholeBuilding
             ? "You're not in \(zone.name) right now, so there's nothing to lock."
@@ -351,6 +359,7 @@ final class AppModel {
     private func updateTracking() {
         let near = !nearZones.isEmpty || pendingZoneID != nil
         location.setNearZone(near && session == nil)
+        beacons.setBackground(session != nil || near)
         if isAppActive || session != nil || near {
             beacons.startRanging(tracker.allZones)
         } else {
@@ -390,10 +399,11 @@ final class AppModel {
     }
 
     /// You walked into a zone with no session running: start one (Auto-start) or offer it, at most every
-    /// 30 minutes per zone and area. On screen without Auto-start, the start screen already offers it.
+    /// 30 minutes per zone (counting from the last session there too). On screen without Auto-start, the start
+    /// screen already offers it.
     private func checkArrival() {
-        guard session == nil, let here = startable, autoStart || !isAppActive else { return }
-        let key = Self.arrivalKey(here.zone, here.area?.id)
+        guard session == nil, pendingZoneID == nil, let here = startable, autoStart || !isAppActive else { return }
+        let key = here.zone.id
         if let last = store.lastArrival(atZone: key), now.timeIntervalSince(last) < Self.arrivalCooldownSeconds { return }
         store.saveArrival(atZone: key, at: now)
         if autoStart {
@@ -404,8 +414,18 @@ final class AppModel {
         }
     }
 
-    private static func arrivalKey(_ zone: Zone, _ areaID: String?) -> String {
-        [zone.id, areaID].compactMap { $0 }.joined(separator: "/")
+    /// With no session: keep the clock (and so the status line, Start button and arrival check) current even
+    /// when no new reading arrives.
+    private func startIdleTicker() {
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.session == nil else { return }
+                self.now = Date()
+                self.zoneChanged()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        idleTicker = timer
     }
 
     /// The arrival notification's Start button.
@@ -469,7 +489,7 @@ final class AppModel {
         let config = SessionConfig(studyMinutes: minutes, grayscale: grayscale, library: library, grace: graceSeconds,
                                    zoneID: zone.id, areaID: areaID)
         let started = Session.start(config: config, zone: zone, at: Date())
-        store.saveArrival(atZone: Self.arrivalKey(zone, areaID), at: Date())
+        store.saveArrival(atZone: zone.id, at: Date())
         tracker.extraZone = nil
         location.startSession()
         updateTracking()
@@ -623,7 +643,7 @@ final class AppModel {
         location.stopSession()
         if let zone = last.zone {
             // Still sitting there when it ends: don't start another one by itself.
-            store.saveArrival(atZone: Self.arrivalKey(zone, last.config.areaID), at: Date())
+            store.saveArrival(atZone: zone.id, at: Date())
         }
         tracker.extraZone = nil
         session = nil

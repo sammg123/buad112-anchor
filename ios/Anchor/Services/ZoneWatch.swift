@@ -19,10 +19,19 @@ actor ZoneWatch {
 
     private var opening: Task<CLMonitor, Never>?
     private var listening: Task<Void, Never>?
+    /// Watch updates run one after another, so two at once can't add the same condition twice.
+    private var updating: Task<Void, Never>?
 
     /// Watches a circle around each zone and each study area's beacon. Condition ids carry their parameters, so a
     /// changed zone replaces its old condition instead of keeping it.
     func watch(_ zones: [Zone], onEvent: @escaping @Sendable (Event) -> Void) async {
+        let previous = updating
+        let update = Task { await previous?.value; await sync(zones, onEvent: onEvent) }
+        updating = update
+        await update.value
+    }
+
+    private func sync(_ zones: [Zone], onEvent: @escaping @Sendable (Event) -> Void) async {
         let monitor = await open()
         let wanted = Self.conditions(for: zones)
         let existing = Set(await monitor.identifiers)

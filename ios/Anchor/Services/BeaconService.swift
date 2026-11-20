@@ -8,6 +8,8 @@ final class BeaconService: NSObject, CLLocationManagerDelegate {
     private nonisolated static let log = Logger(subsystem: "com.sammg123.anchor", category: "beacons")
 
     var onSighting: ((AreaKey, BeaconProximity, Double) -> Void)?
+    /// Every ranging report, beacons or not: proof ranging is still running.
+    var onRanged: (() -> Void)?
 
     private let manager = CLLocationManager()
     private var areasByBeacon: [String: AreaKey] = [:]
@@ -30,6 +32,12 @@ final class BeaconService: NSObject, CLLocationManagerDelegate {
             CLBeaconIdentityConstraint(uuid: $0.beacon.uuid, major: $0.beacon.major, minor: $0.beacon.minor)
         }
         constraints.forEach(manager.startRangingBeacons(satisfying:))
+    }
+
+    /// During a session, keep ranging with the screen locked (Anchor runs in the background then).
+    func setBackground(_ on: Bool) {
+        manager.allowsBackgroundLocationUpdates = on
+        manager.showsBackgroundLocationIndicator = false
     }
 
     func stopRanging() {
@@ -58,6 +66,7 @@ final class BeaconService: NSObject, CLLocationManagerDelegate {
              accuracy: $0.accuracy)
         }
         MainActor.assumeIsolated {
+            onRanged?()
             for beacon in seen {
                 guard let area = areasByBeacon[beacon.key] else { continue }
                 onSighting?(area, beacon.proximity, beacon.accuracy)

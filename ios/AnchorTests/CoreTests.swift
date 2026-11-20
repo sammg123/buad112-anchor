@@ -627,20 +627,20 @@ struct BeaconTests {
 
     @Test("study-area beacon in the building locks; the lobby and outside are free")
     func combination() {
-        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: "room-2") == .locked(areaID: "room-2"))
-        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: nil) == .free)
-        #expect(ZoneRules.lock(zone: library, building: .outside, areaID: "room-2") == .free)
-        #expect(ZoneRules.lock(zone: library, building: .outside, areaID: nil) == .free)
+        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: "room-2", rangingLive: true) == .locked(areaID: "room-2"))
+        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: nil, rangingLive: true) == .free)
+        #expect(ZoneRules.lock(zone: library, building: .outside, areaID: "room-2", rangingLive: true) == .free)
+        #expect(ZoneRules.lock(zone: library, building: .outside, areaID: nil, rangingLive: true) == .free)
         // Indoors GPS often can't prove you're in: a close beacon is enough unless GPS is sure you're out.
-        #expect(ZoneRules.lock(zone: library, building: .unknown, areaID: "room-2") == .locked(areaID: "room-2"))
-        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: "not-here") == .free)
+        #expect(ZoneRules.lock(zone: library, building: .unknown, areaID: "room-2", rangingLive: true) == .locked(areaID: "room-2"))
+        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: "not-here", rangingLive: true) == .free)
     }
 
     @Test("a zone with no study areas is the whole building")
     func wholeBuilding() {
-        #expect(ZoneRules.lock(zone: hall, building: .inside, areaID: nil) == .locked(areaID: nil))
-        #expect(ZoneRules.lock(zone: hall, building: .outside, areaID: nil) == .free)
-        #expect(ZoneRules.lock(zone: hall, building: .unknown, areaID: nil) == .undecided)
+        #expect(ZoneRules.lock(zone: hall, building: .inside, areaID: nil, rangingLive: true) == .locked(areaID: nil))
+        #expect(ZoneRules.lock(zone: hall, building: .outside, areaID: nil, rangingLive: true) == .free)
+        #expect(ZoneRules.lock(zone: hall, building: .unknown, areaID: nil, rangingLive: true) == .undecided)
     }
 
     @Test("the status line: study area, building but not a study area, or outside")
@@ -658,7 +658,7 @@ struct BeaconTests {
         let out = BuildingPresence(state: .outside, outsideRun: 5, outsideSince: t0, lastReadingAt: t0)
         let after = out.spoofed(at: t0.addingTimeInterval(1))
         #expect(after.state == .inside)
-        #expect(ZoneRules.lock(zone: hall, building: after.state(at: t0.addingTimeInterval(1)), areaID: nil) == .locked(areaID: nil))
+        #expect(ZoneRules.lock(zone: hall, building: after.state(at: t0.addingTimeInterval(1)), areaID: nil, rangingLive: true) == .locked(areaID: nil))
     }
 }
 
@@ -703,5 +703,54 @@ struct SavedSessionTests {
         #expect(back.config.areaID == "room-2")
         #expect(back.placeName == "Library · Study Room 2")
         #expect(back.spoofedReadings == 1)
+    }
+}
+
+// MARK: - Review fixes (zones and beacons)
+
+@Suite("Zone and beacon review fixes")
+struct ZoneBeaconReviewTests {
+    @Test("no beacon only frees you while ranging is actually reporting; if iOS goes quiet, nothing changes")
+    func rangingSilence() {
+        #expect(ZoneRules.lock(zone: library, building: .unknown, areaID: nil, rangingLive: true) == .free)
+        #expect(ZoneRules.lock(zone: library, building: .unknown, areaID: nil, rangingLive: false) == .undecided)
+        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: nil, rangingLive: false) == .undecided)
+        // GPS sure you're outside still frees you, ranging or not.
+        #expect(ZoneRules.lock(zone: library, building: .outside, areaID: nil, rangingLive: false) == .free)
+    }
+
+    @Test("ranging is live for 5 s after its last report, empty reports included")
+    func rangingLive() {
+        let ranged = AreaPresence().ranged(at: t0)
+        #expect(ranged.isRangingLive(at: t0.addingTimeInterval(5)))
+        #expect(!ranged.isRangingLive(at: t0.addingTimeInterval(5.1)))
+        #expect(!AreaPresence().isRangingLive(at: t0))
+    }
+
+    @Test("a rough reading counts toward leaving only when its whole circle is outside")
+    func roughExitEvidence() {
+        let inside = BuildingPresence.unknown.updated(with: .mostlyInside, at: t0)
+        #expect(LocationFilter.isExitEvidence(accuracy: 40))
+        #expect(!LocationFilter.isExitEvidence(accuracy: 80))
+        #expect(!LocationFilter.isExitEvidence(accuracy: -1))
+        let rough = [1.0, 6, 11].reduce(inside) { $0.updatedRough(with: .fullyOutside, at: t0.addingTimeInterval($1)) }
+        #expect(rough.state == .outside)
+        #expect(inside.updatedRough(with: .straddling, at: t0.addingTimeInterval(1)) == inside)
+        #expect(inside.updatedRough(with: .mostlyInside, at: t0.addingTimeInterval(1)) == inside)
+    }
+
+    @Test("the status line's early 'outside' goes stale like everything else")
+    func displayStale() {
+        let p = BuildingPresence.unknown.updated(with: .fullyOutside, at: t0)
+        #expect(p.displayState(at: t0.addingTimeInterval(31)) == .unknown)
+    }
+
+    @Test("a zones file iOS couldn't watch (over 20 zones and areas) or with unsafe ids is refused")
+    func watchLimits() {
+        let areas = (0..<20).map { #"{"id":"a\#($0)","name":"A","beacon":{"uuid":"D0236BD0-F73D-463D-930C-7803C1B2E8A3","major":1,"minor":\#($0)}}"# }
+        let tooMany = #"{"version":1,"zones":[{"id":"x","name":"X","polygon":[[34,-118],[34.1,-118],[34.1,-118.1]],"studyAreas":["# + areas.joined(separator: ",") + "]}]}"
+        #expect(throws: ZoneCatalog.Problem.tooManyToWatch) { try ZoneCatalog.decode(Data(tooMany.utf8)) }
+        let pipe = #"{"version":1,"zones":[{"id":"x|y","name":"X","polygon":[[34,-118],[34.1,-118],[34.1,-118.1]]}]}"#
+        #expect(throws: ZoneCatalog.Problem.badID("x|y")) { try ZoneCatalog.decode(Data(pipe.utf8)) }
     }
 }
