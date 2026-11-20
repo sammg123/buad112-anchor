@@ -10,20 +10,28 @@ final class LiveActivityController {
 
     private var activity: Activity<AnchorActivityAttributes>?
     private var lastState: AnchorActivityAttributes.ContentState?
+    /// Updates run one after another, so a quick pair of changes can never land in the wrong order.
+    private var lastUpdate: Task<Void, Never>?
 
-    /// Steps this far from the anchor (still inside the circle) show the walk-out state.
+    /// Steps this far from the anchor (still inside the circle) show the walk-out state, and it stays until you
+    /// are back under `walkingOutUntilMeters`, so pacing near the line doesn't flip the card back and forth.
     nonisolated static let walkingOutAfterMeters = 3.0
+    nonisolated static let walkingOutUntilMeters = 2.0
+
+    nonisolated static func isWalkingOut(meters: Double, wasWalkingOut: Bool) -> Bool {
+        meters >= (wasWalkingOut ? walkingOutUntilMeters : walkingOutAfterMeters)
+    }
     /// While walking out the card refreshes every this many meters; iOS limits how often it may update.
     nonisolated static let walkingUpdateMeters = 5.0
 
     /// `graceEndsAt` is set while you are unlocked and out of Anchor but the grace period has not run out.
     nonisolated static func state(for session: Session, at now: Date, graceEndsAt: Date?,
-                                  walkedMeters: Double) -> AnchorActivityAttributes.ContentState {
+                                  walkedMeters: Double, wasWalkingOut: Bool = false) -> AnchorActivityAttributes.ContentState {
         let mode: AnchorActivityAttributes.ContentState.Mode =
             session.away ? .away
             : session.isOnPhoneCounting ? .onPhone
             : graceEndsAt != nil ? .grace
-            : walkedMeters >= walkingOutAfterMeters ? .walkingOut
+            : isWalkingOut(meters: walkedMeters, wasWalkingOut: wasWalkingOut) ? .walkingOut
             : .studying
         let studyRuns = mode == .studying || mode == .grace || mode == .walkingOut
         return AnchorActivityAttributes.ContentState(
@@ -76,12 +84,15 @@ final class LiveActivityController {
 
     func update(for session: Session, at now: Date, graceEndsAt: Date?, walkedMeters: Double) {
         guard let activity else { return }
-        let state = Self.state(for: session, at: now, graceEndsAt: graceEndsAt, walkedMeters: walkedMeters)
+        let state = Self.state(for: session, at: now, graceEndsAt: graceEndsAt, walkedMeters: walkedMeters,
+                               wasWalkingOut: lastState?.mode == .walkingOut)
         guard Self.needsUpdate(from: lastState, to: state) else { return }
         lastState = state
         let id = activity.id
         // Activity is not Sendable: look it up again inside the task instead of sending it.
-        Task.detached {
+        let previous = lastUpdate
+        lastUpdate = Task.detached {
+            await previous?.value
             for item in Activity<AnchorActivityAttributes>.activities where item.id == id {
                 await item.update(ActivityContent(state: state, staleDate: Self.staleDate(state)))
             }
@@ -91,7 +102,10 @@ final class LiveActivityController {
     func end() {
         activity = nil
         lastState = nil
+        let previous = lastUpdate
+        lastUpdate = nil
         Task.detached {
+            await previous?.value
             for item in Activity<AnchorActivityAttributes>.activities {
                 await item.end(nil, dismissalPolicy: .immediate)
             }

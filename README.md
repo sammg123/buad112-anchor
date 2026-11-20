@@ -111,11 +111,14 @@ A native version for the phone itself, shipped through TestFlight.
 
 - **Start:** pick minutes and a lock radius (25 m minimum, up to 200 m), then *Drop anchor here*. Stop stays locked
   until you are past the radius plus GPS slack (at most 50 m more).
-- **On your phone** means the phone is unlocked while Anchor is not on screen, at your spot. The study timer freezes
-  and the phone clock runs (it never resets during a session). Escalation:
-  0:00 the Lock Screen / Dynamic Island Live Activity turns red; from 0:15 a Time Sensitive notification buzzes every
-  15 s, every 5 s after 1:00; a voice reads your phone time every 30 s; from 2:00 an alarm loops. Locking the phone or
-  opening Anchor stops all of it.
+- **On your phone** means the phone is unlocked while Anchor is not on screen, at your spot, past the grace period.
+  The study timer freezes and the phone clock runs (it never resets during a session). Escalation, in phone time:
+  0:00 the Lock Screen / Dynamic Island Live Activity turns red and one buzz; from 0:15 a Time Sensitive
+  notification every 15 s (every 5 s after 1:00); from 0:30 nonstop vibration and a voice reading your phone
+  time; from 1:00 a looping siren. Locking the phone or opening Anchor stops all of it. Settings lists every step.
+- **Walk-out compass** (session screen): a heading-up dial of your own steps, live per step (steps are found in
+  the phone's bounce 25 times a second; the pedometer sets the stride), with the lock ring, your trail, and an
+  arrow pointing out. The Lock Screen shows a walking-out state that refreshes every 5 m.
 - **Away** past the lock radius, the phone is free, nothing counts, and Stop unlocks. Distance comes from your own
   steps and turns (pedometer + gyroscope, added up as a vector from the anchor), so walking back cancels walking
   out; GPS only decides on its own when it is sharper than 20 m. Location and Motion & Fitness are both required to start.

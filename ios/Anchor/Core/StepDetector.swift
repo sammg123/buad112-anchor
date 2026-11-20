@@ -45,6 +45,25 @@ struct StepDetector: Equatable, Sendable {
         return (StepDetector(filtered: f, isArmed: isArmed, lastStepAt: lastStepAt), false)
     }
 
+    /// Live steps may run at most this far ahead of the pedometer, which tells real walking from a shaken phone.
+    static let leadAllowanceMeters = 4.0
+    /// The most distance one pedometer report may fill in at once.
+    static let maxCatchUpMeters = 8.0
+    /// The pedometer has to be at least this far ahead of the live steps before its extra distance is walked in.
+    static let catchUpThresholdMeters = 1.5
+
+    /// Whether a step found in the bounce may move you: only while the live total stays within a few meters of
+    /// the pedometer, so shaking the phone at a desk can't walk you out of the circle.
+    static func allowsLiveStep(liveMeters: Double, stride: Double, pedometerMeters: Double) -> Bool {
+        liveMeters + stride <= pedometerMeters + leadAllowanceMeters
+    }
+
+    /// Distance the pedometer has counted that the live steps missed, capped per report.
+    static func catchUp(pedometerMeters: Double, liveMeters: Double) -> Double {
+        let missing = pedometerMeters - liveMeters
+        return missing > catchUpThresholdMeters ? min(missing, maxCatchUpMeters) : 0
+    }
+
     /// Meters per step from the pedometer's own totals, within human limits.
     static func stride(pedometerMeters: Double, pedometerSteps: Int) -> Double {
         guard pedometerSteps >= minPedometerSteps, pedometerMeters > 0 else { return defaultStrideMeters }

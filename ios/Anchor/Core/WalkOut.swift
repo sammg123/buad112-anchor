@@ -23,4 +23,11 @@ enum WalkOut {
     static func outwardAngle(_ position: DeadReckoning) -> Double {
         atan2(position.east, position.north)
     }
+
+    /// The same angle, shifted by whole turns to sit nearest `reference` (the last one shown), so the arrow never
+    /// spins a full circle when you cross behind the anchor.
+    static func outwardAngle(_ position: DeadReckoning, near reference: Double) -> Double {
+        let angle = outwardAngle(position)
+        return angle + 2 * .pi * ((reference - angle) / (2 * .pi)).rounded()
+    }
 }

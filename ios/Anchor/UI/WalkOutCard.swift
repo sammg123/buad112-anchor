@@ -113,6 +113,8 @@ struct WalkOutCompass: View {
     let trail: [DeadReckoning]
     let radius: Double
     let isOut: Bool
+    /// The arrow's last angle, so each new one is the nearest equivalent and it never spins a full turn.
+    @State private var arrowAngle = 0.0
 
     var body: some View {
         GeometryReader { proxy in
@@ -147,7 +149,7 @@ struct WalkOutCompass: View {
                             .frame(width: 12, height: 17)
                             .offset(y: -19)
                             .frame(width: 60, height: 60)
-                            .rotationEffect(.radians(WalkOut.outwardAngle(position)))
+                            .rotationEffect(.radians(arrowAngle))
                             .offset(x: you.x, y: you.y)
                             .transition(.opacity)
                     }
@@ -184,6 +186,8 @@ struct WalkOutCompass: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .accessibilityHidden(true)
+        .onAppear { arrowAngle = WalkOut.outwardAngle(position, near: heading) }
+        .onChange(of: position) { _, new in arrowAngle = WalkOut.outwardAngle(new, near: arrowAngle) }
     }
 
     /// A step position in screen points from the center, north up, held inside the dial.

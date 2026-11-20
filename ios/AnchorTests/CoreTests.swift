@@ -602,3 +602,39 @@ struct WalkOutStatusTests {
         #expect(abs(WalkOut.outwardAngle(DeadReckoning(east: 5, north: 0, walkedMeters: 5)) - .pi / 2) < 1e-9)
     }
 }
+
+// MARK: - Review fixes (compass build)
+
+@Suite("Compass review fixes")
+struct CompassReviewTests {
+    @Test("live steps can only run a few meters ahead of the pedometer, so shaking the phone can't unlock Stop")
+    func shakeCapped() {
+        #expect(StepDetector.allowsLiveStep(liveMeters: 0, stride: 0.7, pedometerMeters: 0))
+        #expect(StepDetector.allowsLiveStep(liveMeters: 3.2, stride: 0.7, pedometerMeters: 0))
+        #expect(!StepDetector.allowsLiveStep(liveMeters: 3.5, stride: 0.7, pedometerMeters: 0))
+        #expect(StepDetector.allowsLiveStep(liveMeters: 20, stride: 0.7, pedometerMeters: 18))
+    }
+
+    @Test("pedometer catch-up is capped per report")
+    func catchUpCapped() {
+        #expect(StepDetector.catchUp(pedometerMeters: 10, liveMeters: 9) == 0)
+        #expect(StepDetector.catchUp(pedometerMeters: 14, liveMeters: 10) == 4)
+        #expect(StepDetector.catchUp(pedometerMeters: 60, liveMeters: 10) == StepDetector.maxCatchUpMeters)
+    }
+
+    @Test("the arrow angle is kept near the last one, so crossing behind the anchor never spins it")
+    func arrowUnwrapped() {
+        let justWest = DeadReckoning(east: -0.01, north: -5, walkedMeters: 5)
+        let angle = WalkOut.outwardAngle(justWest, near: .pi)
+        #expect(abs(angle - .pi) < 0.01)
+        #expect(abs(WalkOut.outwardAngle(DeadReckoning(east: 5, north: 0, walkedMeters: 5), near: 2 * .pi + 1) - (2 * .pi + .pi / 2)) < 1e-9)
+    }
+
+    @Test("the walking-out card has hysteresis: in at 3 m, back out under 2 m")
+    func hysteresis() {
+        #expect(LiveActivityController.isWalkingOut(meters: 3, wasWalkingOut: false))
+        #expect(!LiveActivityController.isWalkingOut(meters: 2.5, wasWalkingOut: false))
+        #expect(LiveActivityController.isWalkingOut(meters: 2.5, wasWalkingOut: true))
+        #expect(!LiveActivityController.isWalkingOut(meters: 1.9, wasWalkingOut: true))
+    }
+}

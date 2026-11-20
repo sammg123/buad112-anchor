@@ -17,6 +17,7 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
     private var wantsKeepAlive = false
     private var wantsAlarm = false
     private var buzzing = false
+    private var buzzGeneration = 0
     private var interruptionObserver: NSObjectProtocol?
     private var resetObserver: NSObjectProtocol?
 
@@ -93,17 +94,19 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
     func startBuzzing() {
         guard !buzzing else { return }
         buzzing = true
-        buzzOnce()
+        buzzGeneration += 1
+        buzzOnce(generation: buzzGeneration)
     }
 
     func stopBuzzing() {
         buzzing = false
     }
 
-    private func buzzOnce() {
-        guard buzzing else { return }
+    /// Each chain carries its generation, so a stop and quick restart can never leave two chains running.
+    private func buzzOnce(generation: Int) {
+        guard buzzing, generation == buzzGeneration else { return }
         AudioServicesPlayAlertSoundWithCompletion(SystemSoundID(kSystemSoundID_Vibrate)) { @Sendable [weak self] in
-            Task { @MainActor in self?.buzzOnce() }
+            Task { @MainActor in self?.buzzOnce(generation: generation) }
         }
     }
 

@@ -13,8 +13,6 @@ final class MotionTracker {
     private static let sampleInterval = 1.0 / 25
     /// A gap longer than this between samples (Anchor was not running) is not integrated.
     private static let maxSampleGap = 0.25
-    /// When the pedometer is this far ahead of the live steps, the difference is walked in.
-    private static let catchUpMeters = 1.5
     /// How many recent positions the compass draws as your trail.
     private static let trailLength = 80
 
@@ -33,6 +31,8 @@ final class MotionTracker {
     @ObservationIgnored private var lastSampleTime: TimeInterval?
     /// Distance the live steps have added since `start`, to compare against the pedometer's total.
     @ObservationIgnored private var liveMeters = 0.0
+    /// The pedometer's latest total since `start`.
+    @ObservationIgnored private var pedometerMeters = 0.0
 
     #if DEBUG
     /// Simulator only: `-fakeWalk` walks a scripted path (out, a turn, back a little, out again) so the compass
@@ -70,6 +70,9 @@ final class MotionTracker {
             position = start
             heading = startHeading
             trail = [start]
+            steps = 0
+            liveMeters = 0
+            pedometerMeters = .greatestFiniteMagnitude
             isRunning = true
             startFakeWalk()
             return
@@ -84,6 +87,7 @@ final class MotionTracker {
         stride = StepDetector.defaultStrideMeters
         lastSampleTime = nil
         liveMeters = 0
+        pedometerMeters = 0
         isRunning = true
         motion.deviceMotionUpdateInterval = Self.sampleInterval
         motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { @Sendable [weak self] data, error in
@@ -124,14 +128,17 @@ final class MotionTracker {
         }
         let (next, stepped) = detector.adding(verticalAcceleration: upward, at: time)
         detector = next
-        if stepped { walk(stride, countsAsStep: true) }
+        if stepped, StepDetector.allowsLiveStep(liveMeters: liveMeters, stride: stride, pedometerMeters: pedometerMeters) {
+            walk(stride, countsAsStep: true)
+        }
     }
 
     /// The pedometer is the truth for distance: it sets the stride, and fills in steps the live detector missed.
     private func pedometerCounted(meters: Double, steps pedometerSteps: Int) {
         stride = StepDetector.stride(pedometerMeters: meters, pedometerSteps: pedometerSteps)
-        let missing = meters - liveMeters
-        if missing > Self.catchUpMeters { walk(missing, countsAsStep: false) }
+        pedometerMeters = meters
+        let missing = StepDetector.catchUp(pedometerMeters: meters, liveMeters: liveMeters)
+        if missing > 0 { walk(missing, countsAsStep: false) }
     }
 
     #if DEBUG

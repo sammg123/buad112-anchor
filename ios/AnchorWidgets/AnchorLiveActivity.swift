@@ -101,7 +101,10 @@ private func bigClock(_ state: State) -> Text {
     case .grace:
         return countdown(to: state.graceEndsAt, fallback: 0).foregroundColor(Color(white: 0.85))
     case .onPhone:
-        let counting = state.phoneZeroAt.map { Text(timerInterval: $0...Date.distantFuture, countsDown: false) }
+        // A bounded range: an open-ended timer reserves room for a huge number and leaves a gap before the unit.
+        let counting = state.phoneZeroAt.map {
+            Text(timerInterval: $0...$0.addingTimeInterval(24 * 3600), countsDown: false)
+        }
         return (counting ?? Text(Format.clock(state.phoneSeconds))).foregroundColor(AnchorPalette.brightRed)
     case .walkingOut:
         return Text("\(Int((state.walkedMeters ?? 0).rounded(.down)))")
