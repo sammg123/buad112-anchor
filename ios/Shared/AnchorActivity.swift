@@ -5,7 +5,7 @@ import SwiftUI
 /// only updates this when the mode changes.
 struct AnchorActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable, Sendable {
-        enum Mode: String, Codable, Hashable, Sendable { case studying, onPhone, away }
+        enum Mode: String, Codable, Hashable, Sendable { case studying, grace, onPhone, away }
 
         let mode: Mode
         /// Study time left, frozen while on the phone or away.
@@ -17,6 +17,8 @@ struct AnchorActivityAttributes: ActivityAttributes {
         /// While on the phone: the moment the phone clock would read zero, so it counts up live.
         let phoneZeroAt: Date?
         let totalSeconds: Double
+        /// In the grace period: when it runs out and the phone starts counting.
+        let graceEndsAt: Date?
     }
 
     let minutes: Int
@@ -29,6 +31,7 @@ enum AnchorPalette {
     static let ink = Color(red: 17 / 255, green: 17 / 255, blue: 20 / 255)
     static let secondary = Color(red: 91 / 255, green: 91 / 255, blue: 99 / 255)
     static let away = Color(red: 31 / 255, green: 122 / 255, blue: 58 / 255)
+    static let grace = Color(white: 0.55)
 }
 
 /// The anchor mark: ring, stem, stock and arms. SF Symbols has no anchor.

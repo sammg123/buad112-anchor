@@ -239,11 +239,9 @@ struct LadderTests {
         #expect(buzzes.map(\.delay) == [13, 18, 23])
     }
 
-    @Test("a new pickup is never buzzed before the lock lag has passed, so a quick lock never buzzes")
-    func newPickupWaits() {
-        let buzzes = Ladder.buzzes(phoneSeconds: 62, stintSeconds: 0, limit: 3)
-        #expect(buzzes.first!.delay > Ladder.lockLagSeconds)
-        #expect(buzzes.map(\.delay) == [13, 18, 23])
+    @Test("after the grace period the ladder picks up where the phone clock left off")
+    func resumesWhereLeftOff() {
+        #expect(Ladder.buzzes(phoneSeconds: 62, stintSeconds: 0, limit: 3).map(\.delay) == [3, 8, 13])
         #expect(Ladder.buzzes(phoneSeconds: 0, stintSeconds: 0, limit: 1).first?.delay == 15)
     }
 
@@ -284,11 +282,9 @@ struct EscalationTests {
         #expect(Escalation.isAlarm(phoneSeconds: 120))
     }
 
-    @Test("voice and alarm wait out the lock lag of each pickup, so locking the phone never sets them off")
-    func armedAfterLockLag() {
-        #expect(!Escalation.isArmed(stintSeconds: 0))
-        #expect(!Escalation.isArmed(stintSeconds: Ladder.lockLagSeconds))
-        #expect(Escalation.isArmed(stintSeconds: Ladder.minFirstDelaySeconds))
+    @Test("voice and alarm start the moment the grace period is over")
+    func armedRightAway() {
+        #expect(Escalation.isArmed(stintSeconds: 0))
     }
 
     @Test("spoken lines say the time in words")
@@ -464,5 +460,43 @@ struct GlanceGraceTests {
         let old = #"{"studyMinutes":45,"radiusMeters":25,"grayscale":false}"#.data(using: .utf8)!
         #expect(try JSONDecoder().decode(SessionConfig.self, from: old).graceSeconds == 10)
         #expect(SessionConfig(studyMinutes: 45, radiusMeters: 25, grayscale: false, grace: 30).graceSeconds == 30)
+    }
+}
+
+// MARK: - Live Activity states
+
+@Suite("Live Activity")
+struct LiveActivityStateTests {
+    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    private var session: Session {
+        Session.start(config: SessionConfig(studyMinutes: 25, radiusMeters: 25, grayscale: false),
+                      anchor: GeoPoint(lat: 34, lng: -118), anchorAccuracy: 10, at: t0)
+    }
+
+    @Test("in the grace period it is gray, counts the grace down, and the study clock keeps going")
+    func grace() {
+        let now = t0.addingTimeInterval(60)
+        let state = LiveActivityController.state(for: session.advanced(to: now), at: now,
+                                                 graceEndsAt: now.addingTimeInterval(7))
+        #expect(state.mode == .grace)
+        #expect(state.graceEndsAt == now.addingTimeInterval(7))
+        #expect(state.studyEndsAt == now.addingTimeInterval(24 * 60))
+        #expect(state.phoneZeroAt == nil)
+    }
+
+    @Test("on the phone it is red and the study clock is frozen")
+    func onPhone() {
+        let now = t0.addingTimeInterval(60)
+        let s = session.settingPhone(true, at: now)
+        let state = LiveActivityController.state(for: s, at: now, graceEndsAt: nil)
+        #expect(state.mode == .onPhone)
+        #expect(state.studyEndsAt == nil)
+        #expect(state.graceEndsAt == nil)
+    }
+
+    @Test("no grace while studying in Anchor")
+    func studying() {
+        let state = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil)
+        #expect(state.mode == .studying)
     }
 }

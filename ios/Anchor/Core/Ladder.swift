@@ -9,9 +9,9 @@ enum Ladder {
     static let maxPending = 60
     /// iOS reports a lock about this long after it happens (the data protection grace period).
     static let lockLagSeconds = 10.0
-    /// A new pickup is never buzzed sooner than this, so locking right away (or locking with Anchor open)
-    /// never buzzes.
-    static let minFirstDelaySeconds = 12.0
+    /// The grace period and the instant screen-off notice already keep a quick lock from buzzing, so once a
+    /// pickup counts the ladder carries on from where the phone clock left off.
+    static let minFirstDelaySeconds = 0.0
 
     struct Buzz: Equatable, Sendable {
         let delay: TimeInterval
@@ -77,7 +77,7 @@ enum Escalation {
         return mark
     }
 
-    /// Sound only starts once a pickup has outlasted the lock lag, the same rule the buzzes follow.
+    /// Sound starts the moment a pickup counts (after the grace period), the same rule the buzzes follow.
     static func isArmed(stintSeconds: Double) -> Bool {
         stintSeconds >= Ladder.minFirstDelaySeconds
     }

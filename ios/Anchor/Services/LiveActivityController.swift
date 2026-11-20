@@ -11,16 +11,21 @@ final class LiveActivityController {
     private var activity: Activity<AnchorActivityAttributes>?
     private var lastState: AnchorActivityAttributes.ContentState?
 
-    static func state(for session: Session, at now: Date) -> AnchorActivityAttributes.ContentState {
+    /// `graceEndsAt` is set while you are unlocked and out of Anchor but the grace period has not run out.
+    nonisolated static func state(for session: Session, at now: Date, graceEndsAt: Date?) -> AnchorActivityAttributes.ContentState {
         let mode: AnchorActivityAttributes.ContentState.Mode =
-            session.away ? .away : session.isOnPhoneCounting ? .onPhone : .studying
+            session.away ? .away
+            : session.isOnPhoneCounting ? .onPhone
+            : graceEndsAt != nil ? .grace : .studying
+        let studyRuns = mode == .studying || mode == .grace
         return AnchorActivityAttributes.ContentState(
             mode: mode,
             studyRemaining: session.remainingSeconds,
-            studyEndsAt: mode == .studying ? now.addingTimeInterval(session.remainingSeconds) : nil,
+            studyEndsAt: studyRuns ? now.addingTimeInterval(session.remainingSeconds) : nil,
             phoneSeconds: session.phoneSeconds,
             phoneZeroAt: mode == .onPhone ? now.addingTimeInterval(-session.phoneSeconds) : nil,
-            totalSeconds: session.targetSeconds
+            totalSeconds: session.targetSeconds,
+            graceEndsAt: mode == .grace ? graceEndsAt : nil
         )
     }
 
@@ -32,7 +37,7 @@ final class LiveActivityController {
     /// Starting needs Anchor on screen; iOS refuses from the background.
     func start(for session: Session, at now: Date) {
         guard activity == nil, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        let state = Self.state(for: session, at: now)
+        let state = Self.state(for: session, at: now, graceEndsAt: nil)
         do {
             activity = try Activity.request(
                 attributes: AnchorActivityAttributes(minutes: session.config.studyMinutes),
@@ -49,9 +54,9 @@ final class LiveActivityController {
         activity = Activity<AnchorActivityAttributes>.activities.first
     }
 
-    func update(for session: Session, at now: Date) {
+    func update(for session: Session, at now: Date, graceEndsAt: Date?) {
         guard let activity else { return }
-        let state = Self.state(for: session, at: now)
+        let state = Self.state(for: session, at: now, graceEndsAt: graceEndsAt)
         guard state.mode != lastState?.mode else { return }
         lastState = state
         let id = activity.id

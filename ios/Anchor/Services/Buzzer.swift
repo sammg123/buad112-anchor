@@ -54,6 +54,17 @@ final class Buzzer {
         silent ? UNNotificationSound(named: UNNotificationSoundName("silence.wav")) : .default
     }
 
+    /// The buzz the moment the grace period runs out.
+    func pickupBuzz(phoneSeconds: Double, silent: Bool) {
+        let content = UNMutableNotificationContent()
+        content.title = phoneSeconds < 1 ? "You're on your phone" : "Back on your phone · \(Format.clock(phoneSeconds))"
+        content.body = "Grace is over. The study timer stopped. Lock it and this all stops."
+        content.sound = Self.sound(silent: silent)
+        content.interruptionLevel = .timeSensitive
+        content.threadIdentifier = Self.thread
+        add(UNNotificationRequest(identifier: "anchor-pickup", content: content, trigger: nil))
+    }
+
     func testBuzz(silent: Bool) {
         let content = UNMutableNotificationContent()
         content.title = "Test buzz"

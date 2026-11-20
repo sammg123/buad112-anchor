@@ -390,7 +390,7 @@ final class AppModel {
         }
         applyBuzzes(before: before, next: next)
         applyEscalation(before: before, next: next)
-        liveActivity.update(for: next, at: now)
+        liveActivity.update(for: next, at: now, graceEndsAt: graceEndsAt(for: next))
 
         if before == nil || before?.isStudying != next.isStudying {
             buzzer.scheduleDone(at: next.projectedFinish(from: now), now: now, grayscale: next.config.grayscale)
@@ -400,8 +400,19 @@ final class AppModel {
         }
     }
 
+    /// While unlocked and out of Anchor but still inside the grace period: when it runs out.
+    private func graceEndsAt(for session: Session) -> Date? {
+        guard let since = outsideAnchorSince, !session.onPhone, !session.away else { return nil }
+        return since.addingTimeInterval(session.config.graceSeconds)
+    }
+
     private func applyBuzzes(before: Session?, next: Session) {
         let wasCounting = before?.isOnPhoneCounting ?? false
+        if next.isOnPhoneCounting, !wasCounting {
+            // Grace is over: the effects start now, from wherever the ladder was.
+            buzzer.pickupBuzz(phoneSeconds: next.phoneSeconds, silent: next.config.isLibrary)
+            escalator.vibrate()
+        }
         if next.isOnPhoneCounting {
             let runningLow = next.phoneSeconds >= buzzer.scheduledThroughSeconds - Self.ladderRefillSeconds
             if !wasCounting || runningLow {
