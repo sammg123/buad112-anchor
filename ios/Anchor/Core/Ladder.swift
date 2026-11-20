@@ -79,9 +79,13 @@ enum Escalation {
     /// The grace period only lasts until you've used up a minute of phone time (Sam, 11-20: "anytime after a
     /// minute of screen time the sirens and the vibrations should be continuously going off"). From then on every
     /// unlock outside Anchor counts at once, so the siren and nonstop vibration start the instant you pick it up.
+    /// The only allowance left then is a beat to tap Anchor straight after unlocking.
     static func graceSeconds(configured: Double, phoneSeconds: Double) -> Double {
-        phoneSeconds >= alarmAfterSeconds ? 0 : configured
+        phoneSeconds >= alarmAfterSeconds ? min(configured, openAnchorSeconds) : configured
     }
+
+    /// Past 1:00 of phone time: time to open Anchor right after unlocking without setting anything off.
+    static let openAnchorSeconds = 2.0
 
     /// One row of the annoyance list in Settings. `startsAt` is phone time after the grace period.
     struct Annoyance: Equatable, Sendable, Identifiable {

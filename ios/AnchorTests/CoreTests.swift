@@ -1000,18 +1000,20 @@ struct NewAreaTests {
 
 @Suite("No grace after a minute")
 struct NoGraceAfterMinuteTests {
-    @Test("before 1:00 of phone time you get your grace; from 1:00 on, none")
+    @Test("before 1:00 of phone time you get your grace; from 1:00 on, only the 2 s it takes to tap Anchor")
     func grace() {
         #expect(Escalation.graceSeconds(configured: 10, phoneSeconds: 59) == 10)
-        #expect(Escalation.graceSeconds(configured: 10, phoneSeconds: 60) == 0)
-        #expect(Escalation.graceSeconds(configured: 30, phoneSeconds: 300) == 0)
+        #expect(Escalation.graceSeconds(configured: 10, phoneSeconds: 60) == Escalation.openAnchorSeconds)
+        #expect(Escalation.graceSeconds(configured: 30, phoneSeconds: 300) == 2)
+        #expect(Escalation.graceSeconds(configured: 0, phoneSeconds: 300) == 0)
     }
 
     @Test("past 1:00, unlocking counts at once, and the siren and nonstop vibration are both on")
     func instant() {
         let unlocked = Date(timeIntervalSince1970: 1_000)
         let grace = Escalation.graceSeconds(configured: 10, phoneSeconds: 75)
-        #expect(PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked, grace: grace))
+        #expect(!PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(1.9), grace: grace))
+        #expect(PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(2), grace: grace))
         #expect(Escalation.isAlarm(phoneSeconds: 75))
         #expect(Escalation.isContinuousVibration(phoneSeconds: 75))
     }

@@ -685,7 +685,8 @@ final class AppModel {
     private func graceEndsAt(for session: Session) -> Date? {
         guard let since = outsideAnchorSince, !session.onPhone, !session.away else { return nil }
         let grace = Escalation.graceSeconds(configured: session.config.graceSeconds, phoneSeconds: session.phoneSeconds)
-        return grace > 0 ? since.addingTimeInterval(grace) : nil
+        // Past 1:00 the 2 s to tap Anchor isn't shown as a grace period.
+        return grace > Escalation.openAnchorSeconds ? since.addingTimeInterval(grace) : nil
     }
 
     private func applyBuzzes(before: Session?, next: Session) {
