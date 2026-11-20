@@ -3,7 +3,7 @@ import Foundation
 /// What the student chose on the cover before starting.
 struct SessionConfig: Codable, Equatable, Sendable {
     let studyMinutes: Int
-    /// Only in sessions saved before zones: the circle around the dropped anchor.
+    /// A dropped anchor's lock radius (nil for a zone session).
     let radiusMeters: Double?
     /// Run the "Anchor Gray" shortcut at the start and "Anchor Color" at the end.
     let grayscale: Bool
@@ -17,9 +17,9 @@ struct SessionConfig: Codable, Equatable, Sendable {
     let areaID: String?
 
     init(studyMinutes: Int, grayscale: Bool, library: Bool = false, grace: Double = PickupRule.defaultGraceSeconds,
-         zoneID: String? = nil, areaID: String? = nil) {
+         radiusMeters: Double? = nil, zoneID: String? = nil, areaID: String? = nil) {
         self.studyMinutes = studyMinutes
-        self.radiusMeters = nil
+        self.radiusMeters = radiusMeters
         self.grayscale = grayscale
         self.library = library
         self.grace = grace
@@ -39,8 +39,8 @@ struct SessionConfig: Codable, Equatable, Sendable {
 /// - away: out of the zone; the phone is free there and nothing else counts.
 struct Session: Codable, Equatable, Sendable {
     let config: SessionConfig
-    /// The no-phone zone this session is locked to. Nil only for sessions saved before zones existed; those use a
-    /// circle of the chosen radius around the anchor.
+    /// Where this session is locked: a no-phone zone, or the circle around a dropped anchor. Nil only for sessions
+    /// saved before zones existed; those use a circle of the chosen radius around the anchor.
     let zone: Zone?
     let anchor: GeoPoint
     let anchorAccuracy: Double
@@ -72,6 +72,12 @@ struct Session: Codable, Equatable, Sendable {
     var placeName: String {
         [area.name, area.area(config.areaID)?.name].compactMap { $0 }.joined(separator: " · ")
     }
+
+    /// Dropped anywhere with "Drop anchor here" (or saved before zones), rather than started in a zone.
+    var isDroppedAnchor: Bool { area.isDroppedAnchor }
+
+    /// The place name for the Lock Screen: a zone's name and study area, or nothing for your own spot.
+    var lockScreenPlace: String? { isDroppedAnchor ? nil : placeName }
 
     var spoofedReadings: Int { spoofed ?? 0 }
 

@@ -50,7 +50,7 @@ final class LiveActivityController {
         let state = Self.state(for: session, at: now, graceEndsAt: nil)
         do {
             activity = try Activity.request(
-                attributes: AnchorActivityAttributes(minutes: session.config.studyMinutes, place: session.placeName),
+                attributes: AnchorActivityAttributes(minutes: session.config.studyMinutes, place: session.lockScreenPlace),
                 content: ActivityContent(state: state, staleDate: Self.staleDate(state))
             )
             lastState = state

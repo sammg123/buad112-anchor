@@ -10,10 +10,14 @@ struct ZoneLayers: MapContent {
     var body: some MapContent {
         ForEach(zones) { zone in
             MapPolygon(coordinates: zone.polygon.map(\.coordinate))
-                .foregroundStyle(tint.opacity(0.2))
+                .foregroundStyle(tint.opacity(zone.isDroppedAnchor ? 0.14 : 0.2))
                 .stroke(tint.opacity(0.85), lineWidth: 2)
             Annotation("", coordinate: zone.center.coordinate, anchor: .center) {
-                ZoneLabel(name: zone.name, tint: tint)
+                if zone.isDroppedAnchor {
+                    AnchorPin(size: 30, color: tint)
+                } else {
+                    ZoneLabel(name: zone.name, tint: tint)
+                }
             }
         }
         if let accuracy {

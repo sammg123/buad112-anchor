@@ -64,8 +64,20 @@ struct Zone: Codable, Equatable, Sendable, Identifiable {
     /// Meters to the nearest edge: positive inside, negative outside.
     func depth(of point: GeoPoint) -> Double { ZoneGeometry.depth(of: point, in: polygon) }
 
-    /// A legacy session's spot: a circle of its radius around where it was started.
-    static func circle(id: String = "dropped-anchor", name: String = "Your spot", center: GeoPoint,
+    static let droppedAnchorID = "dropped-anchor"
+
+    /// A spot from "Drop anchor here", not a zone from the zones file.
+    var isDroppedAnchor: Bool { id == Self.droppedAnchorID }
+
+    /// "Drop anchor here": your radius around where you stand, widened by how rough that reading was (at most
+    /// 50 m), so a poor anchor can't put the edge right under you.
+    static func droppedAnchor(center: GeoPoint, radius: Double, anchorAccuracy: Double) -> Zone {
+        let margin = min(max(anchorAccuracy, 0), AnchorRules.maxAnchorMarginMeters)
+        return circle(center: center, radius: radius + margin)
+    }
+
+    /// A circle zone (a dropped anchor, or a session saved before zones).
+    static func circle(id: String = droppedAnchorID, name: String = "Your spot", center: GeoPoint,
                        radius: Double, segments: Int = 48) -> Zone {
         let points = (0..<segments).map { i -> GeoPoint in
             let a = Double(i) / Double(segments) * 2 * .pi

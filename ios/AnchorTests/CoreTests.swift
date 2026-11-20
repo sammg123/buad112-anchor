@@ -754,3 +754,65 @@ struct ZoneBeaconReviewTests {
         #expect(throws: ZoneCatalog.Problem.badID("x|y")) { try ZoneCatalog.decode(Data(pipe.utf8)) }
     }
 }
+
+// MARK: - Dropped anchors
+
+@Suite("Dropped anchor")
+struct DroppedAnchorTests {
+    @Test("the lock radius is 25 to 200 m in 5 m steps, 25 by default")
+    func radius() {
+        #expect(AnchorRules.defaultRadiusMeters == 25)
+        #expect(AnchorRules.clampedRadius(10) == 25)
+        #expect(AnchorRules.clampedRadius(37) == 35)
+        #expect(AnchorRules.clampedRadius(38) == 40)
+        #expect(AnchorRules.clampedRadius(900) == 200)
+    }
+
+    @Test("an anchor needs a reading within 100 m and 30 s")
+    func usableAnchor() {
+        #expect(AnchorRules.isUsableAnchor(accuracy: 30, age: 5))
+        #expect(!AnchorRules.isUsableAnchor(accuracy: 30, age: 31))
+        #expect(!AnchorRules.isUsableAnchor(accuracy: 150, age: 1))
+        #expect(!AnchorRules.isUsableAnchor(accuracy: -1, age: 1))
+    }
+
+    @Test("the spot is a circle of your radius plus how rough the anchor reading was, at most 50 m extra")
+    func circle() {
+        let spot = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 10)
+        #expect(spot.isDroppedAnchor)
+        #expect(spot.usesWholeBuilding)
+        #expect(abs(spot.depth(of: campus) - 35) < 0.5)
+        let rough = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 400)
+        #expect(abs(rough.depth(of: campus) - 75) < 0.5)
+    }
+
+    @Test("a dropped-anchor session keeps its circle and radius, and the Lock Screen shows no place name")
+    func session() throws {
+        let config = SessionConfig(studyMinutes: 25, grayscale: false, radiusMeters: 40)
+        let started = Session.start(config: config, zone: Zone.droppedAnchor(center: campus, radius: 40, anchorAccuracy: 5), at: t0)
+        let back = try JSONDecoder().decode(Session.self, from: JSONEncoder().encode(started))
+        #expect(back.config.radiusMeters == 40)
+        #expect(back.isDroppedAnchor)
+        #expect(back.lockScreenPlace == nil)
+        #expect(Session.start(config: config, zone: library, at: t0).lockScreenPlace == "Library")
+    }
+
+    @Test("leaving your spot needs your whole accuracy circle outside it, like any zone")
+    func leaving() {
+        let spot = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 0)
+        #expect(ZoneGeometry.fit(center: offset(campus, 30, 0), radius: 10, in: spot.polygon) == .straddling)
+        #expect(ZoneGeometry.fit(center: offset(campus, 36, 0), radius: 10, in: spot.polygon) == .fullyOutside)
+    }
+
+    @MainActor
+    @Test("a new spot starts fresh: the last spot's in/out doesn't carry over")
+    func freshSpot() {
+        let tracker = ZoneTracker(zones: [])
+        let first = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 5)
+        tracker.setExtraZone(first)
+        tracker.received(LocationReading(point: offset(campus, 300, 0), accuracy: 5, time: t0, isSpoofed: false), at: t0)
+        #expect(tracker.buildings[first.id] != nil)
+        tracker.setExtraZone(Zone.droppedAnchor(center: offset(campus, 300, 0), radius: 25, anchorAccuracy: 5))
+        #expect(tracker.buildings[first.id] == nil)
+    }
+}

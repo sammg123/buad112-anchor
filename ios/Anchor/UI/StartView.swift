@@ -1,8 +1,8 @@
 import MapKit
 import SwiftUI
 
-/// The start screen: no-phone zones shaded on the map, where you are, how long, and "Start in <study area>"
-/// once you're in one.
+/// The start screen: drop an anchor anywhere (your radius around you), or, in a no-phone zone's study area,
+/// start there. Zones are shaded on the map, with where you are.
 struct StartView: View {
     @Environment(AppModel.self) private var model
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
@@ -15,7 +15,7 @@ struct StartView: View {
             VStack(spacing: 0) {
                 topBar
                 Spacer()
-                sheet(minutes: $model.minutes)
+                sheet(minutes: $model.minutes, radius: $model.radiusMeters)
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
@@ -25,6 +25,7 @@ struct StartView: View {
         .onAppear { if ProcessInfo.processInfo.arguments.contains("-settings") { showingSettings = true } }
         #endif
         .onChange(of: fixKey) { _, _ in recenter() }
+        .onChange(of: model.radiusMeters) { _, _ in recenter() }
         .onChange(of: model.place.zone?.id) { _, _ in recenter() }
         .onChange(of: model.fix == nil) { _, _ in recenter() }
         .onAppear(perform: recenter)
@@ -33,6 +34,12 @@ struct StartView: View {
     private var map: some View {
         Map(position: $camera) {
             ZoneLayers(zones: model.tracker.zones, accuracy: model.tracker.accuracyCircle)
+            if model.startable == nil, let here = model.fix?.coordinate {
+                // The circle "Drop anchor here" would lock.
+                MapCircle(center: here, radius: AnchorRules.clampedRadius(model.radiusMeters))
+                    .foregroundStyle(Palette.blue.opacity(0.12))
+                    .stroke(Palette.blue.opacity(0.6), lineWidth: 2)
+            }
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
         .mapControlVisibility(.hidden)
@@ -55,10 +62,15 @@ struct StartView: View {
         .padding(.top, 8)
     }
 
-    private func sheet(minutes: Binding<Int>) -> some View {
+    private func sheet(minutes: Binding<Int>, radius: Binding<Double>) -> some View {
         VStack(spacing: 22) {
-            PlaceCard(place: model.place)
+            if model.place.zone != nil {
+                PlaceCard(place: model.place)
+            }
             MinutePicker(minutes: minutes)
+            if model.startable == nil {
+                RadiusSlider(radius: radius)
+            }
             GraceStepper()
             LibraryToggle()
             if !model.notificationsAllowed || !model.hasPasscode {
@@ -67,16 +79,21 @@ struct StartView: View {
             if model.isFindingSpot {
                 FindingSpot()
             } else if let here = model.startable {
-                Button { model.startZoneSession(here.zone.id) } label: {
-                    Label { Text("Start in \(here.area?.name ?? here.zone.name)") } icon: { AnchorMark(size: 22) }
+                VStack(spacing: 6) {
+                    Button { model.startZoneSession(here.zone.id) } label: {
+                        Label { Text("Start in \(here.area?.name ?? here.zone.name)") } icon: { AnchorMark(size: 22) }
+                    }
+                    .buttonStyle(ProminentButtonStyle(color: Palette.red))
+                    Button("Drop my own anchor instead", action: model.dropAnchor)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Palette.blue)
+                        .frame(minHeight: 44)
                 }
-                .buttonStyle(ProminentButtonStyle(color: Palette.red))
             } else {
-                Label("Walk into a study area to start", systemImage: "figure.walk")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Palette.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 54)
-                    .background(.white.opacity(0.6), in: Capsule())
+                Button(action: model.dropAnchor) {
+                    Label { Text("Drop anchor here") } icon: { AnchorMark(size: 22) }
+                }
+                .buttonStyle(ProminentButtonStyle())
             }
         }
         .foregroundStyle(Palette.ink)
@@ -104,7 +121,7 @@ struct StartView: View {
     /// Frame the zone you're in, or follow you, with room around it.
     private func recenter() {
         let target = model.place.zone.map { ($0.center.coordinate, max($0.wakeRadiusMeters * 2, 200)) }
-            ?? model.fix.map { ($0.coordinate, 400) }
+            ?? model.fix.map { ($0.coordinate, max(AnchorRules.clampedRadius(model.radiusMeters) * 5, 150)) }
         guard let (center, span) = target else { return }
         // The sheet covers the lower half: aim below the target so it sits in the open top part of the map.
         let shifted = CLLocationCoordinate2D(latitude: center.latitude - span * 0.45 / 111_195, longitude: center.longitude)
@@ -163,6 +180,31 @@ private struct MinutePicker: View {
     }
 }
 
+private struct RadiusSlider: View {
+    @Binding var radius: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Lock radius").font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(Int(AnchorRules.clampedRadius(radius))) m")
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(Palette.blue)
+            }
+            Slider(value: $radius, in: AnchorRules.minRadiusMeters...AnchorRules.maxRadiusMeters,
+                   step: AnchorRules.radiusStepMeters)
+                .tint(Palette.blue)
+                .accessibilityLabel("Lock radius")
+                .accessibilityValue("\(Int(radius)) meters")
+            Text("Stop stays locked until you walk out of the circle.")
+                .font(.footnote)
+                .foregroundStyle(Palette.secondary)
+        }
+        .sensoryFeedback(.selection, trigger: radius)
+    }
+}
+
 private struct FindingSpot: View {
     @Environment(AppModel.self) private var model
 
@@ -180,8 +222,9 @@ private struct FindingSpot: View {
     }
 
     private var text: String {
-        guard let fix = model.fix, fix.horizontalAccuracy >= 0 else { return "Checking you're in the zone…" }
-        return "Checking you're in the zone… GPS within \(Format.meters(fix.horizontalAccuracy))"
+        let label = model.isDroppingAnchor ? "Finding your spot…" : "Checking you're in the zone…"
+        guard let fix = model.fix, fix.horizontalAccuracy >= 0 else { return label }
+        return "\(label) GPS within \(Format.meters(fix.horizontalAccuracy))"
     }
 }
 

@@ -64,6 +64,8 @@ final class AppModel {
     var grayscale: Bool { didSet { savePreferences() } }
     var library: Bool { didSet { savePreferences() } }
     var graceSeconds: Double { didSet { savePreferences() } }
+    /// "Drop anchor here": Stop stays locked inside this circle around you.
+    var radiusMeters: Double { didSet { savePreferences() } }
     /// Start a session by itself when you walk into a no-phone zone, instead of asking first.
     var autoStart: Bool { didSet { store.autoStart = autoStart } }
     var notice: String?
@@ -88,6 +90,8 @@ final class AppModel {
     private var shortcutGraceUntil = Date.distantPast
     /// A zone start (from the arrival notice) waiting until being in the zone is confirmed.
     private var pendingZoneID: String?
+    /// "Drop anchor here" waiting for a usable reading.
+    private(set) var isDroppingAnchor = false
     /// Which start attempt the 20 s give-up belongs to, so an older one can't cancel a newer one.
     private var pendingAttempt: UUID?
     /// Keeps `now` (and the start screen) current with no session running.
@@ -108,6 +112,7 @@ final class AppModel {
         grayscale = saved?.grayscale ?? false
         library = saved?.isLibrary ?? false
         graceSeconds = saved?.graceSeconds ?? PickupRule.defaultGraceSeconds
+        radiusMeters = AnchorRules.clampedRadius(saved?.radiusMeters ?? AnchorRules.defaultRadiusMeters)
         autoStart = store.autoStart
         hasOnboarded = store.hasOnboarded
         finished = store.loadFinished()
@@ -135,6 +140,7 @@ final class AppModel {
         let args = ProcessInfo.processInfo.arguments
         if args.contains("-onboarded") { hasOnboarded = true }
         autoStartsZone = args.contains("-autozone")
+        if args.contains("-autostart"), session == nil { dropAnchor() }
         if args.contains("-fakeBeacon") { startFakeBeacon() }
         #endif
     }
@@ -174,6 +180,13 @@ final class AppModel {
 
     /// The zone (and study area) you could start a session in right now.
     var startable: (zone: Zone, area: StudyArea?)? { tracker.lockingZone(at: now) }
+
+    /// Roughly how much farther to walk before Stop unlocks: out past the edge by the GPS accuracy (the whole
+    /// accuracy circle has to be outside).
+    var metersToUnlock: Double? {
+        guard let session, let depth = tracker.depth(in: session.area) else { return nil }
+        return max(1, depth + (tracker.lastUsed?.accuracy ?? 0))
+    }
 
     /// Meters to the nearest way out of a building (its edge), while you're inside one; nil otherwise.
     func metersToEdge(of zone: Zone) -> Double? {
@@ -259,7 +272,36 @@ final class AppModel {
             : "You're not in one of \(zone.name)'s study areas right now, so there's nothing to lock."
     }
 
+    /// "Drop anchor here": a session anywhere, locked to a circle around you. It waits for a usable reading.
+    func dropAnchor() {
+        guard session == nil else { return }
+        guard isReadyToStart else {
+            notice = "Anchor needs Location with Precise Location on. Turn them on in Settings › Anchor › Location."
+            return
+        }
+        if let fix, isUsableAnchor(fix) {
+            beginAnchor(at: fix)
+        } else {
+            pendingZoneID = nil
+            isDroppingAnchor = true
+            isFindingSpot = true
+            location.refresh()
+        }
+    }
+
+    private func isUsableAnchor(_ fix: CLLocation) -> Bool {
+        fix.reading.isSpoofed == false
+            && AnchorRules.isUsableAnchor(accuracy: fix.horizontalAccuracy, age: -fix.timestamp.timeIntervalSinceNow)
+    }
+
+    private func beginAnchor(at fix: CLLocation) {
+        let radius = AnchorRules.clampedRadius(radiusMeters)
+        begin(in: Zone.droppedAnchor(center: fix.point, radius: radius, anchorAccuracy: fix.horizontalAccuracy),
+              areaID: nil, radius: radius)
+    }
+
     func cancelFindingSpot() {
+        isDroppingAnchor = false
         pendingZoneID = nil
         isFindingSpot = false
         updateTracking()
@@ -370,6 +412,7 @@ final class AppModel {
     private func received(_ newFix: CLLocation) {
         fix = newFix
         now = Date()
+        if isDroppingAnchor, session == nil, isUsableAnchor(newFix) { return beginAnchor(at: newFix) }
         let verdict = tracker.received(newFix.reading, at: now)
         if verdict == .spoofed, let current = session {
             // A faked reading: ignored, you count as still in the zone, and the session remembers it.
@@ -481,16 +524,18 @@ final class AppModel {
 
     // MARK: - The loop
 
-    private func begin(in zone: Zone, areaID: String?) {
+    /// Starts a session in a zone from the zones file, or (with `radius`) at a dropped anchor's circle.
+    private func begin(in zone: Zone, areaID: String?, radius: Double? = nil) {
         pendingZoneID = nil
+        isDroppingAnchor = false
         isFindingSpot = false
         finished = nil
         store.saveFinished(nil)
         let config = SessionConfig(studyMinutes: minutes, grayscale: grayscale, library: library, grace: graceSeconds,
-                                   zoneID: zone.id, areaID: areaID)
+                                   radiusMeters: radius, zoneID: zone.isDroppedAnchor ? nil : zone.id, areaID: areaID)
         let started = Session.start(config: config, zone: zone, at: Date())
-        store.saveArrival(atZone: zone.id, at: Date())
-        tracker.extraZone = nil
+        if !zone.isDroppedAnchor { store.saveArrival(atZone: zone.id, at: Date()) }
+        tracker.setExtraZone(zone)
         location.startSession()
         updateTracking()
         escalator.startKeepAlive()
@@ -512,8 +557,8 @@ final class AppModel {
         // A ladder scheduled before Anchor was ended would keep buzzing for nobody.
         buzzer.cancelLadder()
         liveActivity.adoptExisting()
-        // A session saved before zones keeps its circle.
-        tracker.extraZone = saved.zone == nil ? saved.area : nil
+        // A dropped anchor (or a session saved before zones) keeps its circle.
+        tracker.setExtraZone(saved.area)
         location.startSession()
         escalator.startKeepAlive()
         volumeGuard.setEnforcing(!saved.config.isLibrary)
@@ -570,7 +615,7 @@ final class AppModel {
             buzzer.scheduleDone(at: next.projectedFinish(from: now), now: now, grayscale: next.config.grayscale)
         }
         if let before, before.away != next.away, !isAppActive, !isPaused {
-            announceAway(next.away)
+            announceAway(next.away, spot: next.isDroppedAnchor)
         }
     }
 
@@ -620,12 +665,13 @@ final class AppModel {
         escalator.setAlarm(Escalation.isAlarm(phoneSeconds: next.phoneSeconds))
     }
 
-    private func announceAway(_ away: Bool) {
+    private func announceAway(_ away: Bool, spot: Bool) {
+        let place = spot ? "your spot" : "the no-phone zone"
         if away {
-            buzzer.notify(id: "anchor-away", title: "You left the no-phone zone",
+            buzzer.notify(id: "anchor-away", title: "You left \(place)",
                           body: "Your phone is free and the timer is paused. Stop is unlocked.")
         } else {
-            buzzer.notify(id: "anchor-back", title: "Back in the no-phone zone",
+            buzzer.notify(id: "anchor-back", title: "Back at \(place)",
                           body: "The timer is running again. So is the buzzing, if you pick up your phone.")
         }
     }
@@ -641,11 +687,11 @@ final class AppModel {
         liveActivity.end()
         if !last.isComplete || isAppActive { buzzer.cancelDone() }
         location.stopSession()
-        if let zone = last.zone {
+        if let zone = last.zone, !zone.isDroppedAnchor {
             // Still sitting there when it ends: don't start another one by itself.
             store.saveArrival(atZone: zone.id, at: Date())
         }
-        tracker.extraZone = nil
+        tracker.setExtraZone(nil)
         session = nil
         updateTracking()
         finished = last
@@ -657,7 +703,7 @@ final class AppModel {
 
     private func savePreferences() {
         store.saveConfig(SessionConfig(studyMinutes: minutes, grayscale: grayscale, library: library,
-                                       grace: graceSeconds))
+                                       grace: graceSeconds, radiusMeters: radiusMeters))
     }
 
     // MARK: - Location rules

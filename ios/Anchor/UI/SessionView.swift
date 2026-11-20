@@ -33,7 +33,7 @@ struct SessionView: View {
 
     private func map(_ session: Session) -> some View {
         let away = session.away
-        let tint = away ? Palette.away : Palette.red
+        let tint = away ? Palette.away : (session.isDroppedAnchor ? Palette.blue : Palette.red)
         return Map(position: $camera) {
             ZoneLayers(zones: [session.area], tint: tint, accuracy: model.tracker.accuracyCircle)
         }
@@ -171,13 +171,13 @@ private struct ZoneCard: View {
                     .contentTransition(.symbolEffect(.replace))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(out ? "OUTSIDE THE ZONE" : session.placeName.uppercased())
+                    Text(kicker(out: out))
                         .font(.caption.weight(.bold))
                         .tracking(0.4)
                         .foregroundStyle(out ? Palette.away : Palette.red)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                    Text(out ? "Your phone is free." : "No-phone zone.")
+                    Text(out ? "Your phone is free." : (session.isDroppedAnchor ? "Phone down." : "No-phone zone."))
                         .font(.title3.weight(.bold))
                     Text(hint(out: out))
                         .font(.subheadline)
@@ -192,7 +192,8 @@ private struct ZoneCard: View {
                 }
                 .buttonStyle(ProminentButtonStyle(color: Palette.ink))
             } else {
-                Label("Leave the zone to unlock Stop", systemImage: "lock.fill")
+                Label(session.isDroppedAnchor ? "Walk out of your circle to unlock Stop" : "Leave the zone to unlock Stop",
+                      systemImage: "lock.fill")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Palette.ink.opacity(0.8))
                     .frame(maxWidth: .infinity, minHeight: 54)
@@ -206,8 +207,17 @@ private struct ZoneCard: View {
         .sensoryFeedback(.success, trigger: out)
     }
 
+    private func kicker(out: Bool) -> String {
+        if session.isDroppedAnchor { return out ? "AWAY FROM YOUR SPOT" : "AT YOUR SPOT" }
+        return out ? "OUTSIDE THE ZONE" : session.placeName.uppercased()
+    }
+
     private func hint(out: Bool) -> String {
         if out { return "The timer is paused. Walk back in to keep going." }
+        if session.isDroppedAnchor {
+            guard let meters = model.metersToUnlock else { return "Waiting for GPS…" }
+            return "About \(Int(meters.rounded(.up))) m more to walk before Stop unlocks."
+        }
         let zone = session.area
         if let area = zone.area(session.config.areaID) {
             return "Walk out of \(area.name) to unlock Stop. The lobby and café are free."

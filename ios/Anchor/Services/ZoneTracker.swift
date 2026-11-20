@@ -13,14 +13,22 @@ final class ZoneTracker {
     private(set) var lastUsed: LocationReading?
     private(set) var buildings: [String: BuildingPresence] = [:]
     private(set) var areas = AreaPresence()
-    /// The running session's zone when it isn't in the zones file (a session saved before zones).
-    var extraZone: Zone?
+    /// The running session's place when it isn't in the zones file: a dropped anchor's circle.
+    private(set) var extraZone: Zone?
 
     init(zones: [Zone]) {
         self.zones = zones
     }
 
     var estimate: LocationEstimate? { filter.estimate }
+
+    /// Tracks a dropped anchor's circle (or nothing). A new spot starts fresh: whatever was known about the last
+    /// one is forgotten.
+    func setExtraZone(_ zone: Zone?) {
+        if let old = extraZone { buildings = buildings.filter { $0.key != old.id } }
+        if let zone { buildings = buildings.filter { $0.key != zone.id } }
+        extraZone = zone.flatMap { extra in zones.contains { $0.id == extra.id } ? nil : extra }
+    }
 
     /// Everything checked: the zones file plus a legacy session's circle.
     var allZones: [Zone] {
