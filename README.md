@@ -118,7 +118,7 @@ A native version for the phone itself, shipped through TestFlight.
   opening Anchor stops all of it.
 - **Away** past the lock radius, the phone is free, nothing counts, and Stop unlocks. Distance comes from your own
   steps and turns (pedometer + gyroscope, added up as a vector from the anchor), so walking back cancels walking
-  out; GPS only decides on its own when it is sharper than 20 m. Without Motion & Fitness access, GPS plus slack decides.
+  out; GPS only decides on its own when it is sharper than 20 m. Location and Motion & Fitness are both required to start.
 - **Library mode** (start screen): vibration only, no voice, alarm or notification sound. Outside library mode the
   volume can't go below 3 of 16 notches during a session. Anchor vibrates the phone on every buzz, and every second
   from 2:00.

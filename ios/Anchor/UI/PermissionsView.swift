@@ -5,7 +5,6 @@ import UIKit
 struct PermissionsView: View {
     @Environment(AppModel.self) private var model
     @State private var askedNotifications = false
-    @State private var askedMotion = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -27,7 +26,7 @@ struct PermissionsView: View {
                 PermissionRow(symbol: "location.fill", tint: Palette.blue, title: "Location", tag: "REQUIRED",
                               detail: "To know where your spot is and when you leave it. Choose Always when iOS asks.",
                               done: model.hasLocation)
-                PermissionRow(symbol: "figure.walk", tint: Palette.blue, title: "Motion & Fitness", tag: "RECOMMENDED",
+                PermissionRow(symbol: "figure.walk", tint: Palette.blue, title: "Motion & Fitness", tag: "REQUIRED",
                               detail: "Counts your steps and turns, so Stop unlocks when you really walk out of your circle. Indoor GPS is off by 20 to 60 m.",
                               done: model.motionAllowed)
                 PermissionRow(symbol: "bell.fill", tint: Palette.red, title: "Notifications", tag: "RECOMMENDED",
@@ -49,8 +48,10 @@ struct PermissionsView: View {
     @ViewBuilder
     private var buttons: some View {
         VStack(spacing: 10) {
-            if model.locationDenied {
-                Text("Location is off for Anchor. Turn it on in Settings › Anchor › Location.")
+            if model.locationDenied || model.motionDenied {
+                Text(model.locationDenied
+                     ? "Location is off for Anchor. Turn it on in Settings › Anchor › Location."
+                     : "Motion & Fitness is off for Anchor. Turn it on in Settings › Anchor.")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Palette.red)
                 Button("Open Settings") {
@@ -60,17 +61,11 @@ struct PermissionsView: View {
             } else if !model.hasLocation {
                 Button("Allow Location") { model.requestLocation() }
                     .buttonStyle(ProminentButtonStyle())
-            } else if !model.motionAllowed && !askedMotion && !model.motionDenied {
-                Button("Allow Motion") {
-                    Task {
-                        await model.requestMotion()
-                        askedMotion = true
-                    }
+            } else if !model.isReadyToStart {
+                Button("Allow Motion & Fitness") {
+                    Task { await model.requestMotion() }
                 }
                 .buttonStyle(ProminentButtonStyle())
-                Button("Not now") { askedMotion = true }
-                    .font(.body.weight(.semibold))
-                    .frame(minHeight: 44)
             } else if !model.notificationsAllowed && !askedNotifications {
                 Button("Turn On Buzzing") {
                     Task {

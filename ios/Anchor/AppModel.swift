@@ -106,11 +106,16 @@ final class AppModel {
     var screen: Screen {
         if session != nil { return .session }
         if finished != nil { return .done }
-        if !hasOnboarded || !hasLocation { return .permissions }
+        if !hasOnboarded || !isReadyToStart { return .permissions }
         return .start
     }
 
     var hasLocation: Bool { locationStatus == .authorizedAlways || locationStatus == .authorizedWhenInUse }
+    /// Location and Motion & Fitness are both required: steps decide when Stop unlocks.
+    var isReadyToStart: Bool {
+        PermissionGate.isReady(location: hasLocation, motion: motionAllowed, motionSupported: MotionTracker.isSupported)
+    }
+
     var locationDenied: Bool { locationStatus == .denied || locationStatus == .restricted }
 
     var distanceToAnchor: Double? {
@@ -174,8 +179,8 @@ final class AppModel {
     // MARK: - Session lifecycle
 
     func dropAnchor() {
-        guard hasLocation else {
-            notice = "Anchor needs your location to know where you study. Allow it in Settings."
+        guard isReadyToStart else {
+            notice = "Anchor needs Location and Motion & Fitness. Allow them in Settings › Anchor."
             return
         }
         let config = SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),

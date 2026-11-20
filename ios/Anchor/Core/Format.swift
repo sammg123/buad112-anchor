@@ -24,3 +24,10 @@ enum SetupInput {
         min(max(minutes + delta, minMinutes), maxMinutes)
     }
 }
+
+/// What has to be allowed before a session can start. Notifications are recommended, never required.
+enum PermissionGate {
+    static func isReady(location: Bool, motion: Bool, motionSupported: Bool) -> Bool {
+        location && (motion || !motionSupported)
+    }
+}

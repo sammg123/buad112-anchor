@@ -423,3 +423,20 @@ struct VibrationVolumeTests {
         #expect(SessionConfig(studyMinutes: 45, radiusMeters: 25, grayscale: false, library: true).isLibrary)
     }
 }
+
+// MARK: - Permission gate
+
+@Suite("Permission gate")
+struct PermissionGateTests {
+    @Test("location and Motion & Fitness are both required; notifications are not")
+    func required() {
+        #expect(PermissionGate.isReady(location: true, motion: true, motionSupported: true))
+        #expect(!PermissionGate.isReady(location: true, motion: false, motionSupported: true))
+        #expect(!PermissionGate.isReady(location: false, motion: true, motionSupported: true))
+    }
+
+    @Test("a phone without a pedometer is not locked out")
+    func unsupported() {
+        #expect(PermissionGate.isReady(location: true, motion: false, motionSupported: false))
+    }
+}

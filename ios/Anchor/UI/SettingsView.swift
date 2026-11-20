@@ -26,7 +26,7 @@ struct SettingsView: View {
                 }
                 Section("So Anchor can do its job") {
                     LabeledContent("Location", value: locationText)
-                    LabeledContent("Motion & Fitness", value: model.motionAllowed ? "On" : "Off (GPS only)")
+                    LabeledContent("Motion & Fitness", value: model.motionAllowed ? "On" : "Off (required)")
                     LabeledContent("Notifications", value: model.notificationsAllowed ? "On" : "Off")
                     LabeledContent("Phone passcode", value: model.hasPasscode ? "Set" : "Missing")
                     Text("Using a Focus? Anchor's buzzes are Time Sensitive. Allow Time Sensitive notifications in that Focus.")
