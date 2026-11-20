@@ -10,15 +10,20 @@ struct SessionConfig: Codable, Equatable, Sendable {
     /// Library mode: vibration only, no voice, alarm or sound, and no volume floor. Optional so settings saved
     /// before it existed still load.
     let library: Bool?
+    /// Seconds out of Anchor after unlocking before it counts as being on your phone.
+    let grace: Double?
 
-    init(studyMinutes: Int, radiusMeters: Double, grayscale: Bool, library: Bool = false) {
+    init(studyMinutes: Int, radiusMeters: Double, grayscale: Bool, library: Bool = false,
+         grace: Double = PickupRule.defaultGraceSeconds) {
         self.studyMinutes = studyMinutes
         self.radiusMeters = radiusMeters
         self.grayscale = grayscale
         self.library = library
+        self.grace = grace
     }
 
     var isLibrary: Bool { library ?? false }
+    var graceSeconds: Double { grace ?? PickupRule.defaultGraceSeconds }
 }
 
 /// One study session. A value: every change returns a new Session.

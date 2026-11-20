@@ -32,6 +32,10 @@ struct SettingsView: View {
                     Text("Using a Focus? Anchor's buzzes are Time Sensitive. Allow Time Sensitive notifications in that Focus.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    Button("Test buzz in 5 seconds") { model.testBuzz() }
+                    Text("Tap it, then lock the phone or go to the home screen. No vibration? Settings › Sounds & Haptics › Haptics: Always Play.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     Button("Open iPhone Settings") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                     }

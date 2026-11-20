@@ -39,8 +39,7 @@ final class Buzzer {
             let content = UNMutableNotificationContent()
             content.title = buzz.title
             content.body = buzz.body
-            // Library mode: no sound; Anchor vibrates the phone itself.
-            content.sound = silent ? nil : .default
+            content.sound = Self.sound(silent: silent)
             content.threadIdentifier = Self.thread
             // Time Sensitive breaks through a Focus, which is exactly when a student would study.
             content.interruptionLevel = .timeSensitive
@@ -48,6 +47,21 @@ final class Buzzer {
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, buzz.delay), repeats: false)
             add(UNNotificationRequest(identifier: "buzz-\(buzz.index)", content: content, trigger: trigger))
         }
+    }
+
+    /// A notification only vibrates when it has a sound, so library mode plays a silent one: vibration, no noise.
+    private static func sound(silent: Bool) -> UNNotificationSound {
+        silent ? UNNotificationSound(named: UNNotificationSoundName("silence.wav")) : .default
+    }
+
+    func testBuzz(silent: Bool) {
+        let content = UNMutableNotificationContent()
+        content.title = "Test buzz"
+        content.body = silent ? "Library mode: you should feel this, not hear it." : "You should hear and feel this."
+        content.sound = Self.sound(silent: silent)
+        content.interruptionLevel = .timeSensitive
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
+        add(UNNotificationRequest(identifier: "anchor-test", content: content, trigger: trigger))
     }
 
     func cancelLadder(clearDelivered: Bool = true) {

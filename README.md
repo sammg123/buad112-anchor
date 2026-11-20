@@ -119,6 +119,9 @@ A native version for the phone itself, shipped through TestFlight.
 - **Away** past the lock radius, the phone is free, nothing counts, and Stop unlocks. Distance comes from your own
   steps and turns (pedometer + gyroscope, added up as a vector from the anchor), so walking back cancels walking
   out; GPS only decides on its own when it is sharper than 20 m. Location and Motion & Fitness are both required to start.
+- **Grace period** (start screen, 0-60 s, default 10): unlocking only counts as being on your phone after this long
+  out of Anchor, so checking the timer on the Lock Screen is free. iOS does not tell apps whether you are on the
+  unlocked Lock Screen or the home screen, so time is the only signal. The screen turning off ends a pickup at once.
 - **Library mode** (start screen): vibration only, no voice, alarm or notification sound. Outside library mode the
   volume can't go below 3 of 16 notches during a session. Anchor vibrates the phone on every buzz, and every second
   from 2:00.

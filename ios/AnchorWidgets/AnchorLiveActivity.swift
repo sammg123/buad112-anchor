@@ -16,13 +16,20 @@ struct AnchorLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(caption(state.mode)).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        MainClock(state: state).font(.system(size: 30, weight: .bold).monospacedDigit())
+                        Text(caption(state.mode)).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                        MainClock(state: state)
+                            .font(.system(size: 30, weight: .bold).monospacedDigit())
+                            .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                DynamicIslandExpandedRegion(.trailing) {
-                    SideClock(state: state).padding(.trailing, 4)
+                DynamicIslandExpandedRegion(.bottom) {
+                    Text(bottomLine(state))
+                        .font(.footnote.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 4)
                 }
             } compactLeading: {
                 Badge(mode: state.mode, size: 22)
@@ -43,6 +50,15 @@ private func caption(_ mode: AnchorActivityAttributes.ContentState.Mode) -> Stri
     case .studying: "Anchored · phone down"
     case .onPhone: "On your phone at your spot"
     case .away: "Away · phone's free"
+    }
+}
+
+/// The full-width line under the expanded Dynamic Island.
+private func bottomLine(_ state: AnchorActivityAttributes.ContentState) -> String {
+    switch state.mode {
+    case .onPhone: "Study paused at \(Format.clock(state.studyRemaining)) · lock it to stop the buzzing"
+    case .studying: "Phone \(Format.clock(state.phoneSeconds)) so far"
+    case .away: "Timer paused at \(Format.clock(state.studyRemaining))"
     }
 }
 
@@ -77,10 +93,13 @@ private struct SideClock: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 0) {
-            Text(state.mode == .onPhone ? "Study paused" : "Phone")
+            Text(state.mode == .onPhone ? "Study" : "Phone")
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .lineLimit(1)
             Text(Format.clock(state.mode == .onPhone ? state.studyRemaining : state.phoneSeconds))
                 .font(.system(size: 17, weight: .bold).monospacedDigit())
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(state.mode == .onPhone ? Color.white : AnchorPalette.brightRed)
         }
     }

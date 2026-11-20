@@ -55,6 +55,7 @@ final class AppModel {
     var radiusMeters: Double { didSet { savePreferences() } }
     var grayscale: Bool { didSet { savePreferences() } }
     var library: Bool { didSet { savePreferences() } }
+    var graceSeconds: Double { didSet { savePreferences() } }
     var notice: String?
 
     private let store = SessionStore()
@@ -68,6 +69,10 @@ final class AppModel {
     private var isAppActive = UIApplication.shared.applicationState != .background
     private var isDeviceUnlocked = true
     private var lastLockNotice = Date.distantPast
+    private var isScreenBlank = false
+    /// When the phone became unlocked with Anchor not on screen; it counts once the glance grace has passed.
+    private var outsideAnchorSince: Date?
+    private let screenWatcher = ScreenWatcher()
     /// After a lock notice, iOS can still say "unlocked" for a moment; only believe it again after this long.
     private static let relockQuietSeconds = 15.0
     private var shortcutGraceUntil = Date.distantPast
@@ -84,12 +89,15 @@ final class AppModel {
         radiusMeters = AnchorRules.clampedRadius(saved?.radiusMeters ?? AnchorRules.defaultRadiusMeters)
         grayscale = saved?.grayscale ?? false
         library = saved?.isLibrary ?? false
+        graceSeconds = saved?.graceSeconds ?? PickupRule.defaultGraceSeconds
         hasOnboarded = store.hasOnboarded
         finished = store.loadFinished()
         locationStatus = location.status
         location.onFix = { [weak self] fix in self?.received(fix) }
         location.onAuthorizationChange = { [weak self] status in self?.locationStatus = status }
         motion.onUpdate = { [weak self] position in self?.stepped(to: position) }
+        screenWatcher.onChange = { [weak self] blank in self?.screenChanged(blank: blank) }
+        screenWatcher.start()
         observeLockState()
         restore()
         location.startForeground()
@@ -184,7 +192,7 @@ final class AppModel {
             return
         }
         let config = SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),
-                                   grayscale: grayscale, library: library)
+                                   grayscale: grayscale, library: library, grace: graceSeconds)
         if let fix, isUsableAnchor(fix) {
             begin(config, at: fix)
         } else {
@@ -209,6 +217,11 @@ final class AppModel {
         guard Self.showsDevTools, session != nil else { return }
         isPaused.toggle()
         reconcile()
+    }
+
+    /// Settings' test: a buzz in 5 s, so you can lock the phone or go home and feel it.
+    func testBuzz() {
+        buzzer.testBuzz(silent: library)
     }
 
     func startOver() {
@@ -260,8 +273,9 @@ final class AppModel {
         observers = [
             center.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.isDeviceUnlocked = true
-                    self?.reconcile()
+                    guard let self, !self.isScreenBlank else { return }
+                    self.isDeviceUnlocked = true
+                    self.reconcile()
                 }
             },
             center.addObserver(forName: UIApplication.protectedDataWillBecomeUnavailableNotification, object: nil, queue: .main) { [weak self] _ in
@@ -270,12 +284,26 @@ final class AppModel {
         ]
     }
 
-    /// iOS says "locked" about 10 s after the fact; those seconds were not phone time.
+    /// iOS says "locked" about 10 s after the fact; those seconds were not phone time. When the screen-off notice
+    /// already caught the lock, there is nothing left to take back.
     private func deviceLocked() {
+        let alreadySeen = !isDeviceUnlocked
         isDeviceUnlocked = false
+        outsideAnchorSince = nil
         lastLockNotice = Date()
         guard let current = session, current.onPhone else { return reconcile() }
-        apply(current.lockedPhone(at: Date(), unseenSeconds: Ladder.lockLagSeconds))
+        apply(current.lockedPhone(at: Date(), unseenSeconds: alreadySeen ? 0 : Ladder.lockLagSeconds))
+    }
+
+    /// Screen off is a lock as far as Anchor is concerned, right away.
+    private func screenChanged(blank: Bool) {
+        isScreenBlank = blank
+        guard blank else { return }
+        isDeviceUnlocked = false
+        outsideAnchorSince = nil
+        lastLockNotice = Date()
+        guard let current = session, current.onPhone else { return reconcile() }
+        apply(current.lockedPhone(at: Date(), unseenSeconds: 0))
     }
 
     // MARK: - The loop
@@ -339,7 +367,10 @@ final class AppModel {
         }
         syncLockState()
         escalator.keepPlaying()
-        let onPhone = !isAppActive && isDeviceUnlocked && now >= shortcutGraceUntil
+        let outside = !isAppActive && isDeviceUnlocked && now >= shortcutGraceUntil
+        outsideAnchorSince = outside ? (outsideAnchorSince ?? now) : nil
+        let onPhone = PickupRule.isOnPhone(outsideAnchorSince: outsideAnchorSince, now: now,
+                                           grace: next.config.graceSeconds)
         next = next.settingPhone(onPhone, at: now).advanced(to: now)
         apply(next)
     }
@@ -432,7 +463,7 @@ final class AppModel {
 
     private func savePreferences() {
         store.saveConfig(SessionConfig(studyMinutes: minutes, radiusMeters: radiusMeters, grayscale: grayscale,
-                                       library: library))
+                                       library: library, grace: graceSeconds))
     }
 
     // MARK: - Location rules
@@ -448,7 +479,8 @@ final class AppModel {
         let available = UIApplication.shared.isProtectedDataAvailable
         if isDeviceUnlocked, !available {
             isDeviceUnlocked = false
-        } else if !isDeviceUnlocked, available, now.timeIntervalSince(lastLockNotice) > Self.relockQuietSeconds {
+        } else if !isDeviceUnlocked, available, !isScreenBlank,
+                  now.timeIntervalSince(lastLockNotice) > Self.relockQuietSeconds {
             isDeviceUnlocked = true
         }
     }

@@ -31,3 +31,21 @@ enum PermissionGate {
         location && (motion || !motionSupported)
     }
 }
+
+/// When being outside Anchor becomes "on your phone": not the moment you unlock (you may only be checking the
+/// timer on the Lock Screen, which iOS does not tell apps apart from the home screen), but once you have stayed
+/// unlocked and out of Anchor for the grace period the student picked.
+enum PickupRule {
+    static let defaultGraceSeconds = 10.0
+    static let maxGraceSeconds = 60.0
+    static let graceStepSeconds = 5.0
+
+    static func isOnPhone(outsideAnchorSince since: Date?, now: Date, grace: Double) -> Bool {
+        guard let since else { return false }
+        return now.timeIntervalSince(since) >= max(0, grace)
+    }
+
+    static func steppedGrace(_ seconds: Double, by delta: Double) -> Double {
+        min(max(seconds + delta, 0), maxGraceSeconds)
+    }
+}

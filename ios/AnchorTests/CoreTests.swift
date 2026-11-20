@@ -440,3 +440,29 @@ struct PermissionGateTests {
         #expect(PermissionGate.isReady(location: true, motion: false, motionSupported: false))
     }
 }
+
+// MARK: - Glance grace
+
+@Suite("Glance grace")
+struct GlanceGraceTests {
+    @Test("the grace after unlocking is free, so checking the Lock Screen never counts")
+    func grace() {
+        let unlocked = Date(timeIntervalSince1970: 1_000)
+        #expect(!PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(9.9), grace: 10))
+        #expect(PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(10), grace: 10))
+        #expect(!PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(25), grace: 30))
+        #expect(PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked, grace: 0))
+        #expect(!PickupRule.isOnPhone(outsideAnchorSince: nil, now: unlocked, grace: 0))
+    }
+
+    @Test("the grace is 0 to 60 s in 5 s steps, 10 s unless chosen, and old settings still load")
+    func setting() throws {
+        #expect(PickupRule.defaultGraceSeconds == 10)
+        #expect(PickupRule.steppedGrace(10, by: 5) == 15)
+        #expect(PickupRule.steppedGrace(0, by: -5) == 0)
+        #expect(PickupRule.steppedGrace(60, by: 5) == 60)
+        let old = #"{"studyMinutes":45,"radiusMeters":25,"grayscale":false}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(SessionConfig.self, from: old).graceSeconds == 10)
+        #expect(SessionConfig(studyMinutes: 45, radiusMeters: 25, grayscale: false, grace: 30).graceSeconds == 30)
+    }
+}

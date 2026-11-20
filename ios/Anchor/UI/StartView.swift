@@ -63,6 +63,7 @@ struct StartView: View {
         VStack(spacing: 22) {
             MinutePicker(minutes: minutes)
             RadiusSlider(radius: radius)
+            GraceStepper()
             LibraryToggle()
             if !model.notificationsAllowed || !model.hasPasscode {
                 warning
@@ -218,5 +219,42 @@ private struct LibraryToggle: View {
             }
         }
         .tint(Palette.blue)
+    }
+}
+
+/// How long you can be unlocked and out of Anchor before it counts, so glancing at the Lock Screen is free.
+private struct GraceStepper: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Grace period").font(.subheadline.weight(.semibold))
+                Text("Free time after unlocking").font(.footnote).foregroundStyle(Palette.secondary)
+            }
+            Spacer(minLength: 8)
+            step("minus", by: -PickupRule.graceStepSeconds, label: "Shorter grace period")
+            Text("\(Int(model.graceSeconds)) s")
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .foregroundStyle(Palette.blue)
+                .frame(minWidth: 40)
+                .accessibilityLabel("Grace period \(Int(model.graceSeconds)) seconds")
+            step("plus", by: PickupRule.graceStepSeconds, label: "Longer grace period")
+        }
+        .sensoryFeedback(.selection, trigger: model.graceSeconds)
+    }
+
+    private func step(_ symbol: String, by delta: Double, label: String) -> some View {
+        Button {
+            model.graceSeconds = PickupRule.steppedGrace(model.graceSeconds, by: delta)
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(Palette.ink)
+                .frame(width: 36, height: 36)
+                .glassCircle()
+        }
+        .frame(minWidth: 44, minHeight: 44)
+        .accessibilityLabel(label)
     }
 }
