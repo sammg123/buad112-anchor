@@ -20,6 +20,9 @@ struct StartView: View {
             .padding(.bottom, 8)
         }
         .sheet(isPresented: $showingSettings) { SettingsView() }
+        #if DEBUG
+        .onAppear { if ProcessInfo.processInfo.arguments.contains("-settings") { showingSettings = true } }
+        #endif
         .onChange(of: model.radiusMeters) { _, _ in recenter() }
         .onChange(of: fixKey) { _, _ in recenter() }
         .onAppear(perform: recenter)

@@ -63,7 +63,9 @@ final class AppModel {
     private let buzzer = Buzzer()
     private let escalator = Escalator()
     private let liveActivity = LiveActivityController()
-    private let motion = MotionTracker()
+    /// Live steps and turns; the session screen's compass reads it directly so it can move every step.
+    let motion = MotionTracker()
+    private var lastWalkedSave = Date.distantPast
     let volumeGuard = VolumeGuard()
     /// Launched in the background (iOS relaunching a session), Anchor is not on screen until a scene says so.
     private var isAppActive = UIApplication.shared.applicationState != .background
@@ -390,7 +392,8 @@ final class AppModel {
         }
         applyBuzzes(before: before, next: next)
         applyEscalation(before: before, next: next)
-        liveActivity.update(for: next, at: now, graceEndsAt: graceEndsAt(for: next))
+        liveActivity.update(for: next, at: now, graceEndsAt: graceEndsAt(for: next),
+                            walkedMeters: usesSteps ? walked.distance : 0)
 
         if before == nil || before?.isStudying != next.isStudying {
             buzzer.scheduleDone(at: next.projectedFinish(from: now), now: now, grayscale: next.config.grayscale)
@@ -433,8 +436,12 @@ final class AppModel {
         }
         let wasArmed = before.map { $0.isOnPhoneCounting && Escalation.isArmed(stintSeconds: $0.stintSeconds) } ?? false
         let previous = wasArmed ? before?.phoneSeconds ?? next.phoneSeconds : next.phoneSeconds
-        // Library mode too: it is vibration only, and the vibration never stops while the pickup counts.
-        escalator.startBuzzing()
+        // Library mode too: nonstop vibration from 0:30 of phone time until the pickup ends.
+        if Escalation.isContinuousVibration(phoneSeconds: next.phoneSeconds) {
+            escalator.startBuzzing()
+        } else {
+            escalator.stopBuzzing()
+        }
         guard !next.config.isLibrary else { return }
         if let mark = Escalation.voiceMark(from: previous, to: next.phoneSeconds) {
             escalator.speak(Escalation.spokenLine(seconds: mark))
@@ -512,8 +519,12 @@ final class AppModel {
 
     private func stepped(to position: DeadReckoning) {
         walked = position
-        store.saveWalked(position)
-        store.saveHeading(motion.heading)
+        let crossedRadius = session.map { position.isOutside(radius: $0.config.radiusMeters) != $0.away } ?? false
+        if crossedRadius || Date().timeIntervalSince(lastWalkedSave) >= Self.saveEverySeconds {
+            store.saveWalked(position)
+            store.saveHeading(motion.heading)
+            lastWalkedSave = Date()
+        }
         reconcile()
     }
 }

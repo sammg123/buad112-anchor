@@ -13,7 +13,12 @@ struct SessionView: View {
                 VStack(spacing: 0) {
                     TimerCard(session: session)
                     Spacer()
-                    if session.away {
+                    if model.usesSteps && !model.isPaused {
+                        VStack(spacing: 10) {
+                            notificationsWarning
+                            WalkOutCard(session: session)
+                        }
+                    } else if session.away {
                         AwayCard(session: session, paused: model.isPaused)
                     } else {
                         lockedFooter
@@ -44,16 +49,21 @@ struct SessionView: View {
         .ignoresSafeArea()
     }
 
+    @ViewBuilder
+    private var notificationsWarning: some View {
+        if !model.notificationsAllowed {
+            Text("Notifications are off, so Anchor can't buzz you")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Palette.red)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .glassCapsule()
+        }
+    }
+
     private var lockedFooter: some View {
         VStack(spacing: 10) {
-            if !model.notificationsAllowed {
-                Text("Notifications are off, so Anchor can't buzz you")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Palette.red)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .glassCapsule()
-            }
+            notificationsWarning
             if let meters = model.usesSteps ? model.walked.distance : model.distanceToAnchor {
                 Text("\(Format.meters(meters)) from your anchor\(model.usesSteps ? " by your steps" : "")")
                     .font(.footnote.weight(.semibold))

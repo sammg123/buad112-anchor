@@ -4,6 +4,8 @@ import WidgetKit
 
 private typealias State = AnchorActivityAttributes.ContentState
 
+/// One layout for every state (see the mocks): a one-line label, one big clock with its unit right after it as a
+/// single piece of text (so the unit can never drift away from the number), and one small fixed-width stat.
 struct AnchorLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AnchorActivityAttributes.self) { context in
@@ -18,15 +20,13 @@ struct AnchorLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(caption(state.mode)).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
-                        MainClock(state: state)
-                            .font(.system(size: 30, weight: .bold).monospacedDigit())
-                            .lineLimit(1)
+                        Text(caption(state)).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                        clockWithUnit(state, size: 30, unitSize: 14)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    BottomLine(state: state)
+                    bottomLine(state)
                         .font(.footnote.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -36,9 +36,10 @@ struct AnchorLiveActivity: Widget {
             } compactLeading: {
                 Badge(mode: state.mode, size: 22)
             } compactTrailing: {
-                MainClock(state: state)
+                bigClock(state)
                     .font(.system(size: 14, weight: .semibold).monospacedDigit())
-                    .frame(maxWidth: 52)
+                    .lineLimit(1)
+                    .frame(maxWidth: 56)
             } minimal: {
                 Badge(mode: state.mode, size: 22)
             }
@@ -47,105 +48,92 @@ struct AnchorLiveActivity: Widget {
     }
 }
 
+// MARK: - Words
+
 private func modeColor(_ mode: State.Mode) -> Color {
     switch mode {
-    case .studying: AnchorPalette.blue
+    case .studying, .walkingOut: AnchorPalette.blue
     case .grace: AnchorPalette.grace
     case .onPhone: AnchorPalette.red
     case .away: AnchorPalette.away
     }
 }
 
-private func caption(_ mode: State.Mode) -> String {
-    switch mode {
-    case .studying: "Anchored · phone down"
-    case .grace: "Grace period · not counting yet"
-    case .onPhone: "On your phone at your spot"
-    case .away: "Away · phone's free"
+private func caption(_ state: State) -> String {
+    switch state.mode {
+    case .studying: "Studying · phone down"
+    case .grace: "Grace period"
+    case .onPhone: "On your phone"
+    case .walkingOut: "Walking out · keep going"
+    case .away: "Away · phone is free"
     }
 }
+
+private func unit(_ state: State) -> String {
+    switch state.mode {
+    case .studying: "left"
+    case .grace: "until it counts"
+    case .onPhone: "on phone"
+    case .walkingOut: "of \(Int(state.radiusMeters ?? 25)) m"
+    case .away: "paused"
+    }
+}
+
+private func metersLeft(_ state: State) -> Int {
+    max(0, Int(((state.radiusMeters ?? 25) - (state.walkedMeters ?? 0)).rounded(.up)))
+}
+
+// MARK: - Clocks
 
 /// A live countdown to `end`, or the frozen value once it has passed.
-private struct Countdown: View {
-    let end: Date?
-    let fallback: Double
+private func countdown(to end: Date?, fallback: Double) -> Text {
+    if let end, end > .now {
+        return Text(timerInterval: Date.now...end, countsDown: true)
+    }
+    return Text(Format.clock(fallback))
+}
 
-    var body: some View {
-        if let end, end > .now {
-            Text(timerInterval: Date.now...end, countsDown: true)
-        } else {
-            Text(Format.clock(fallback))
-        }
+/// The big number of each state, colored.
+private func bigClock(_ state: State) -> Text {
+    switch state.mode {
+    case .studying:
+        return countdown(to: state.studyEndsAt, fallback: state.studyRemaining)
+    case .grace:
+        return countdown(to: state.graceEndsAt, fallback: 0).foregroundColor(Color(white: 0.85))
+    case .onPhone:
+        let counting = state.phoneZeroAt.map { Text(timerInterval: $0...Date.distantFuture, countsDown: false) }
+        return (counting ?? Text(Format.clock(state.phoneSeconds))).foregroundColor(AnchorPalette.brightRed)
+    case .walkingOut:
+        return Text("\(Int((state.walkedMeters ?? 0).rounded(.down)))")
+    case .away:
+        return Text(Format.clock(state.studyRemaining))
     }
 }
 
-/// The big number: the grace countdown, the phone clock counting up, or study time left.
-private struct MainClock: View {
-    let state: State
+/// Clock and unit as ONE Text, so the unit always sits right after the digits.
+private func clockWithUnit(_ state: State, size: CGFloat, unitSize: CGFloat) -> some View {
+    (bigClock(state).font(.system(size: size, weight: .bold).monospacedDigit())
+        + Text(" " + unit(state)).font(.system(size: unitSize, weight: .semibold)).foregroundColor(.white.opacity(0.7)))
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+}
 
-    var body: some View {
-        switch state.mode {
-        case .grace:
-            Countdown(end: state.graceEndsAt, fallback: 0).foregroundStyle(Color(white: 0.85))
-        case .onPhone:
-            if let zero = state.phoneZeroAt {
-                Text(timerInterval: zero...Date.distantFuture, countsDown: false)
-                    .foregroundStyle(AnchorPalette.brightRed)
-            } else {
-                Text(Format.clock(state.phoneSeconds)).foregroundStyle(AnchorPalette.brightRed)
-            }
-        case .studying:
-            Countdown(end: state.studyEndsAt, fallback: state.studyRemaining)
-        case .away:
-            Text(Format.clock(state.studyRemaining))
-        }
+private func bottomLine(_ state: State) -> Text {
+    switch state.mode {
+    case .studying:
+        return Text("Phone \(Format.clock(state.phoneSeconds)) so far")
+    case .grace:
+        return Text("Study still running · ") + countdown(to: state.studyEndsAt, fallback: state.studyRemaining) + Text(" left")
+    case .onPhone:
+        return Text("Study paused at \(Format.clock(state.studyRemaining)) · lock it to stop")
+    case .walkingOut:
+        return Text("\(metersLeft(state)) m more and Stop unlocks")
+    case .away:
+        return Text("Timer paused at \(Format.clock(state.studyRemaining))")
     }
 }
 
-/// The full-width line under the expanded Dynamic Island.
-private struct BottomLine: View {
-    let state: State
-
-    var body: some View {
-        switch state.mode {
-        case .grace:
-            HStack(spacing: 4) {
-                Text("Study still running ·")
-                Countdown(end: state.studyEndsAt, fallback: state.studyRemaining)
-                Text("· phone \(Format.clock(state.phoneSeconds))")
-            }
-        case .onPhone:
-            Text("Study paused at \(Format.clock(state.studyRemaining)) · lock it to stop the buzzing")
-        case .studying:
-            Text("Phone \(Format.clock(state.phoneSeconds)) so far")
-        case .away:
-            Text("Timer paused at \(Format.clock(state.studyRemaining))")
-        }
-    }
-}
-
-/// The small number on the Lock Screen's right side.
-private struct SideClock: View {
-    let state: State
-
-    var body: some View {
-        VStack(alignment: .trailing, spacing: 0) {
-            Text(state.mode == .onPhone || state.mode == .grace ? "Study" : "Phone")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                .lineLimit(1)
-            Group {
-                switch state.mode {
-                case .grace: Countdown(end: state.studyEndsAt, fallback: state.studyRemaining)
-                case .onPhone: Text(Format.clock(state.studyRemaining))
-                default: Text(Format.clock(state.phoneSeconds)).foregroundStyle(AnchorPalette.brightRed)
-                }
-            }
-            .font(.system(size: 17, weight: .bold).monospacedDigit())
-            .lineLimit(1)
-            .frame(maxWidth: 70, alignment: .trailing)
-        }
-    }
-}
+// MARK: - Pieces
 
 private struct Badge: View {
     let mode: State.Mode
@@ -159,46 +147,75 @@ private struct Badge: View {
     }
 }
 
+/// The small stat on the Lock Screen's right: study time while it matters, otherwise phone time.
+private struct SideStat: View {
+    let state: State
+
+    var body: some View {
+        let showsStudy = state.mode == .grace || state.mode == .onPhone || state.mode == .walkingOut
+        VStack(alignment: .trailing, spacing: 0) {
+            Text(showsStudy ? "Study" : "Phone")
+                .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.6))
+                .lineLimit(1)
+            Group {
+                switch state.mode {
+                case .grace, .walkingOut:
+                    countdown(to: state.studyEndsAt, fallback: state.studyRemaining)
+                case .onPhone:
+                    Text(Format.clock(state.studyRemaining))
+                case .studying, .away:
+                    Text(Format.clock(state.phoneSeconds)).foregroundColor(AnchorPalette.brightRed)
+                }
+            }
+            .font(.system(size: 17, weight: .bold).monospacedDigit())
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .multilineTextAlignment(.trailing)
+        }
+        .frame(width: 72, alignment: .trailing)
+    }
+}
+
 private struct LockScreenView: View {
     let state: State
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 Badge(mode: state.mode, size: 40)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(caption(state.mode)).font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.75))
+                    Text(caption(state))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        MainClock(state: state)
-                            .font(.system(size: 34, weight: .bold).monospacedDigit())
-                            .frame(maxWidth: 150, alignment: .leading)
-                        if state.mode == .studying || state.mode == .away {
-                            Text("left").font(.headline).foregroundStyle(.white.opacity(0.75))
-                        }
-                    }
+                    clockWithUnit(state, size: 32, unitSize: 15)
                 }
-                Spacer(minLength: 0)
-                SideClock(state: state)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                SideStat(state: state)
             }
-            progressBar.tint(state.mode == .onPhone ? AnchorPalette.brightRed : Color(red: 0.3, green: 0.61, blue: 1))
+            progressBar
         }
         .foregroundStyle(.white)
-        .padding(18)
+        .padding(16)
     }
 
-    /// While the study clock runs the bar fills by itself; otherwise it holds where the study timer stopped.
+    /// Walking out: how far through the circle. Otherwise study progress, filling by itself while it runs.
     @ViewBuilder
     private var progressBar: some View {
-        if let end = state.studyEndsAt, end > .now {
+        if state.mode == .walkingOut {
+            ProgressView(value: min(1, (state.walkedMeters ?? 0) / max(1, state.radiusMeters ?? 25)))
+                .tint(Color(red: 0.2, green: 0.78, blue: 0.35))
+        } else if let end = state.studyEndsAt, end > .now {
             let start = end.addingTimeInterval(-state.totalSeconds)
             ProgressView(timerInterval: start...end, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+                .tint(Color(red: 0.3, green: 0.61, blue: 1))
         } else {
-            ProgressView(value: progress)
+            ProgressView(value: studyProgress)
+                .tint(state.mode == .onPhone ? AnchorPalette.brightRed : Color(red: 0.3, green: 0.61, blue: 1))
         }
     }
 
-    private var progress: Double {
+    private var studyProgress: Double {
         guard state.totalSeconds > 0 else { return 0 }
         return min(1, max(0, 1 - state.studyRemaining / state.totalSeconds))
     }

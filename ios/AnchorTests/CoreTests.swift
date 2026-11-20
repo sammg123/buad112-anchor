@@ -266,20 +266,20 @@ struct EscalationTests {
     func voiceMarks() {
         #expect(Escalation.voiceMark(from: 29, to: 31) == 30)
         #expect(Escalation.voiceMark(from: 31, to: 59) == nil)
-        #expect(Escalation.voiceMark(from: 59.5, to: 60.5) == 60)
         #expect(Escalation.voiceMark(from: 0, to: 20) == nil)
     }
 
-    @Test("the voice goes quiet once the alarm takes over")
+    @Test("the voice goes quiet once the siren takes over at 1:00")
     func voiceStopsAtAlarm() {
-        #expect(Escalation.voiceMark(from: 119, to: 121) == nil)
-        #expect(Escalation.voiceMark(from: 89, to: 91) == 90)
+        #expect(Escalation.voiceMark(from: 59.5, to: 60.5) == nil)
+        #expect(Escalation.voiceMark(from: 89, to: 91) == nil)
     }
 
-    @Test("the alarm runs from 2:00 on the phone")
+    @Test("the siren runs from 1:00 on the phone")
     func alarm() {
-        #expect(!Escalation.isAlarm(phoneSeconds: 119))
-        #expect(Escalation.isAlarm(phoneSeconds: 120))
+        #expect(Escalation.alarmAfterSeconds == 60)
+        #expect(!Escalation.isAlarm(phoneSeconds: 59.9))
+        #expect(Escalation.isAlarm(phoneSeconds: 60))
     }
 
     @Test("voice and alarm start the moment the grace period is over")
@@ -388,10 +388,22 @@ struct DeadReckoningTests {
 
 @Suite("Vibration and volume")
 struct VibrationVolumeTests {
-    @Test("the nonstop buzz starts the moment a pickup counts, from its first second")
-    func buzzesFromTheStart() {
-        #expect(Escalation.isArmed(stintSeconds: 0))
-        #expect(Escalation.isArmed(stintSeconds: 0.5))
+    @Test("nonstop vibration starts at 0:30 of phone time and keeps going")
+    func continuousVibration() {
+        #expect(Escalation.vibrateAfterSeconds == 30)
+        #expect(!Escalation.isContinuousVibration(phoneSeconds: 29.9))
+        #expect(Escalation.isContinuousVibration(phoneSeconds: 30))
+        #expect(Escalation.isContinuousVibration(phoneSeconds: 600))
+    }
+
+    @Test("the annoyance list in Settings is in order and matches the real thresholds")
+    func annoyanceList() {
+        let steps = Escalation.annoyances(graceSeconds: 10, library: false)
+        #expect(steps.map(\.startsAt) == steps.map(\.startsAt).sorted())
+        #expect(steps.contains { $0.startsAt == Escalation.vibrateAfterSeconds })
+        #expect(steps.contains { $0.startsAt == Escalation.alarmAfterSeconds })
+        let quiet = Escalation.annoyances(graceSeconds: 10, library: true)
+        #expect(!quiet.contains { $0.isSound })
     }
 
     @Test("volume can't go below 3 of 16 notches")
@@ -469,7 +481,7 @@ struct LiveActivityStateTests {
     func grace() {
         let now = t0.addingTimeInterval(60)
         let state = LiveActivityController.state(for: session.advanced(to: now), at: now,
-                                                 graceEndsAt: now.addingTimeInterval(7))
+                                                 graceEndsAt: now.addingTimeInterval(7), walkedMeters: 0)
         #expect(state.mode == .grace)
         #expect(state.graceEndsAt == now.addingTimeInterval(7))
         #expect(state.studyEndsAt == now.addingTimeInterval(24 * 60))
@@ -480,7 +492,7 @@ struct LiveActivityStateTests {
     func onPhone() {
         let now = t0.addingTimeInterval(60)
         let s = session.settingPhone(true, at: now)
-        let state = LiveActivityController.state(for: s, at: now, graceEndsAt: nil)
+        let state = LiveActivityController.state(for: s, at: now, graceEndsAt: nil, walkedMeters: 0)
         #expect(state.mode == .onPhone)
         #expect(state.studyEndsAt == nil)
         #expect(state.graceEndsAt == nil)
@@ -488,7 +500,105 @@ struct LiveActivityStateTests {
 
     @Test("no grace while studying in Anchor")
     func studying() {
-        let state = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil)
+        let state = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 0)
         #expect(state.mode == .studying)
+    }
+}
+
+// MARK: - Step detector
+
+@Suite("Step detector")
+struct StepDetectorTests {
+    /// Vertical acceleration of walking: a bounce per step at `hz` steps a second.
+    private func walk(seconds: Double, hz: Double, amplitude: Double, noise: Double = 0) -> Int {
+        var detector = StepDetector()
+        var steps = 0
+        let rate = 25.0
+        for i in 0..<Int(seconds * rate) {
+            let t = Double(i) / rate
+            let wobble = noise * sin(Double(i) * 12.9898)
+            let (next, stepped) = detector.adding(verticalAcceleration: amplitude * sin(2 * .pi * hz * t) + wobble, at: t)
+            detector = next
+            if stepped { steps += 1 }
+        }
+        return steps
+    }
+
+    @Test("counts each step of a normal walk")
+    func walking() {
+        #expect((18...22).contains(walk(seconds: 10, hz: 2, amplitude: 0.25)))
+    }
+
+    @Test("a brisk walk is still one count per step")
+    func brisk() {
+        #expect((26...30).contains(walk(seconds: 10, hz: 2.8, amplitude: 0.35)))
+    }
+
+    @Test("handling the phone at a desk is not walking")
+    func fidgeting() {
+        #expect(walk(seconds: 10, hz: 2, amplitude: 0.04, noise: 0.03) == 0)
+    }
+
+    @Test("stride comes from the pedometer once it has counted enough steps")
+    func stride() {
+        #expect(StepDetector.stride(pedometerMeters: 0, pedometerSteps: 0) == StepDetector.defaultStrideMeters)
+        #expect(StepDetector.stride(pedometerMeters: 16, pedometerSteps: 20) == 0.8)
+        #expect(StepDetector.stride(pedometerMeters: 100, pedometerSteps: 20) == StepDetector.maxStrideMeters)
+    }
+}
+
+// MARK: - Walking out on the Live Activity
+
+@Suite("Live Activity walking out")
+struct LiveActivityWalkingTests {
+    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    private var session: Session {
+        Session.start(config: SessionConfig(studyMinutes: 25, radiusMeters: 25, grayscale: false),
+                      anchor: GeoPoint(lat: 34, lng: -118), anchorAccuracy: 10, at: t0)
+    }
+
+    @Test("walking a few meters from the anchor shows the walk-out state with the distance")
+    func walkingOut() {
+        let state = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 18.4)
+        #expect(state.mode == .walkingOut)
+        #expect(state.walkedMeters == 18.4)
+        #expect(LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 1).mode == .studying)
+    }
+
+    @Test("the card updates on a mode change or every 5 m, not every step")
+    func updateRate() {
+        let a = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 6)
+        let b = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 9)
+        let c = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 11)
+        #expect(!LiveActivityController.needsUpdate(from: a, to: b))
+        #expect(LiveActivityController.needsUpdate(from: b, to: c))
+        #expect(LiveActivityController.needsUpdate(from: nil, to: a))
+    }
+}
+
+// MARK: - Walk-out status
+
+@Suite("Walk-out status")
+struct WalkOutStatusTests {
+    @Test("at the anchor, walking out, walking back in, and out of the circle")
+    func states() {
+        #expect(WalkOut.status(distance: 0.2, earlier: 0, radius: 25) == .atAnchor)
+        #expect(WalkOut.status(distance: 9, earlier: 7, radius: 25) == .walkingOut)
+        #expect(WalkOut.status(distance: 7, earlier: 9, radius: 25) == .walkingBack)
+        #expect(WalkOut.status(distance: 9, earlier: 9, radius: 25) == .walkingOut)
+        #expect(WalkOut.status(distance: 25.2, earlier: 24, radius: 25) == .out)
+    }
+
+    @Test("meters to go round up so it never says 0 before Stop unlocks")
+    func metersToGo() {
+        #expect(WalkOut.metersToGo(distance: 24.6, radius: 25) == 1)
+        #expect(WalkOut.metersToGo(distance: 18, radius: 25) == 7)
+        #expect(WalkOut.metersToGo(distance: 30, radius: 25) == 0)
+    }
+
+    @Test("the arrow points straight away from the anchor")
+    func arrow() {
+        #expect(abs(WalkOut.outwardAngle(DeadReckoning(east: 0, north: 5, walkedMeters: 5))) < 1e-9)
+        #expect(abs(WalkOut.outwardAngle(DeadReckoning(east: 5, north: 0, walkedMeters: 5)) - .pi / 2) < 1e-9)
     }
 }

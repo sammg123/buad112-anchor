@@ -67,7 +67,45 @@ enum Ladder {
 /// What happens beyond the buzzes: a voice every 30 s, then an alarm from 2:00.
 enum Escalation {
     static let voiceEverySeconds = 30.0
-    static let alarmAfterSeconds = 120.0
+    /// The siren starts at 1:00 of phone time (Sam, 11-20).
+    static let alarmAfterSeconds = 60.0
+    /// Nonstop vibration starts at 0:30 of phone time (Sam, 11-20).
+    static let vibrateAfterSeconds = 30.0
+
+    static func isContinuousVibration(phoneSeconds: Double) -> Bool {
+        phoneSeconds >= vibrateAfterSeconds
+    }
+
+    /// One row of the annoyance list in Settings. `startsAt` is phone time after the grace period.
+    struct Annoyance: Equatable, Sendable, Identifiable {
+        let startsAt: Double
+        let title: String
+        let detail: String
+        let symbol: String
+        let isSound: Bool
+        var id: String { title }
+    }
+
+    /// Every annoyance in the order it kicks in, from the same constants the session uses.
+    static func annoyances(graceSeconds: Double, library: Bool) -> [Annoyance] {
+        let all = [
+            Annoyance(startsAt: 0, title: "Island turns red",
+                      detail: "After your \(Int(graceSeconds)) s grace, the study clock stops and you get one buzz.",
+                      symbol: "circle.fill", isSound: false),
+            Annoyance(startsAt: Ladder.slowStepSeconds, title: "Notification every 15 s",
+                      detail: "Your phone time in a banner, with a vibration.", symbol: "bell.badge.fill", isSound: false),
+            Annoyance(startsAt: vibrateAfterSeconds, title: "Nonstop vibration",
+                      detail: "The phone vibrates without a break until you lock it.", symbol: "iphone.radiowaves.left.and.right",
+                      isSound: false),
+            Annoyance(startsAt: voiceEverySeconds, title: "A voice reads your phone time",
+                      detail: "Out loud, over whatever is playing, even on silent.", symbol: "speaker.wave.3.fill", isSound: true),
+            Annoyance(startsAt: alarmAfterSeconds, title: "Siren",
+                      detail: "Loops until you lock the phone or open Anchor.", symbol: "light.beacon.max.fill", isSound: true),
+            Annoyance(startsAt: Ladder.fastAfterSeconds, title: "Notification every 5 s",
+                      detail: "Three times as often.", symbol: "bell.and.waves.left.and.right.fill", isSound: false)
+        ]
+        return all.filter { !(library && $0.isSound) }.sorted { $0.startsAt < $1.startsAt }
+    }
 
     /// The 30 s mark the phone clock crossed between two readings, if any, before the alarm takes over.
     static func voiceMark(from previous: Double, to current: Double) -> Double? {

@@ -5,7 +5,7 @@ import SwiftUI
 /// only updates this when the mode changes.
 struct AnchorActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable, Sendable {
-        enum Mode: String, Codable, Hashable, Sendable { case studying, grace, onPhone, away }
+        enum Mode: String, Codable, Hashable, Sendable { case studying, grace, onPhone, walkingOut, away }
 
         let mode: Mode
         /// Study time left, frozen while on the phone or away.
@@ -19,6 +19,9 @@ struct AnchorActivityAttributes: ActivityAttributes {
         let totalSeconds: Double
         /// In the grace period: when it runs out and the phone starts counting.
         let graceEndsAt: Date?
+        /// Walking out: how far your steps have taken you from the anchor, and the circle you need to leave.
+        let walkedMeters: Double?
+        let radiusMeters: Double?
     }
 
     let minutes: Int
