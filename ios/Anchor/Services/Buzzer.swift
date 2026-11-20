@@ -75,14 +75,16 @@ final class Buzzer {
         UNUserNotificationCenter.current().setNotificationCategories([category])
     }
 
-    /// "You're at Leavey Library. Start?"
-    func zoneArrival(_ zone: Zone) {
+    /// "You're in Leavey Library: Study Room 2. Anchor is on." (Auto-start), or the same with a Start button.
+    func zoneArrival(_ zone: Zone, area: StudyArea?, started: Bool) {
         let content = UNMutableNotificationContent()
-        content.title = "You're at \(zone.name)"
-        content.body = "It's a no-phone zone. Tap Start to anchor your study session."
+        content.title = "You're in " + [zone.name, area?.name].compactMap { $0 }.joined(separator: ": ")
+        content.body = started
+            ? "Anchor is on. Stop stays locked until you leave."
+            : "It's a no-phone zone. Tap Start to turn Anchor on."
         content.sound = .default
         content.interruptionLevel = .timeSensitive
-        content.categoryIdentifier = Self.zoneCategory
+        content.categoryIdentifier = started ? "" : Self.zoneCategory
         content.userInfo = ["zone": zone.id]
         add(UNNotificationRequest(identifier: "anchor-arrival-\(zone.id)", content: content, trigger: nil))
     }

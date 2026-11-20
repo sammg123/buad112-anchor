@@ -27,8 +27,9 @@ enum SetupInput {
 
 /// What has to be allowed before a session can start. Notifications are recommended, never required.
 enum PermissionGate {
-    static func isReady(location: Bool, motion: Bool, motionSupported: Bool) -> Bool {
-        location && (motion || !motionSupported)
+    /// Location (Always, ideally) and Precise Location; zones can't work on approximate location.
+    static func isReady(location: Bool, precise: Bool) -> Bool {
+        location && precise
     }
 }
 

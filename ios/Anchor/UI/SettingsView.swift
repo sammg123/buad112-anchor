@@ -14,10 +14,11 @@ struct SettingsView: View {
             List {
                 annoyanceSection
                 wholeSessionSection
-                switchesSection(library: $model.library, grayscale: $model.grayscale)
+                switchesSection(library: $model.library, grayscale: $model.grayscale, autoStart: $model.autoStart)
                 if model.grayscale { graySetupSection }
                 permissionsSection
                 trySection
+                if AppModel.showsDevTools { developerSection }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Settings")
@@ -53,18 +54,22 @@ struct SettingsView: View {
             InfoRow(symbol: "lock.iphone", tint: Palette.blue, title: "Lock Screen and Dynamic Island",
                     detail: "Your study clock, grace and phone time, live.")
             InfoRow(symbol: "lock.fill", tint: Palette.ink, title: "Stop is locked",
-                    detail: "Until you leave the zone. GPS decides, with slack for drift.")
+                    detail: "Until you leave the study area (its beacon) or the building (GPS).")
             if model.grayscale {
                 InfoRow(symbol: "circle.lefthalf.filled", tint: .gray, title: "Black and white",
-                        detail: "From the moment you drop the anchor until the session ends.")
+                        detail: "From the moment the session starts until it ends.")
             }
         }
     }
 
     // MARK: - Switches
 
-    private func switchesSection(library: Binding<Bool>, grayscale: Binding<Bool>) -> some View {
+    private func switchesSection(library: Binding<Bool>, grayscale: Binding<Bool>, autoStart: Binding<Bool>) -> some View {
         Section {
+            Toggle(isOn: autoStart) {
+                RowLabel(symbol: "bolt.fill", tint: Palette.red, title: "Auto-start",
+                         detail: "Walk into a study area and the session starts by itself. Off: Anchor asks first.")
+            }
             Toggle(isOn: library) {
                 RowLabel(symbol: "books.vertical.fill", tint: .brown, title: "Library mode",
                          detail: "Vibration only. No voice, siren, sound or volume floor.")
@@ -76,7 +81,7 @@ struct SettingsView: View {
         } header: {
             Text("Options")
         } footer: {
-            Text("Grace period, minutes and lock radius are on the start screen.")
+            Text("Grace period and minutes are on the start screen.")
         }
         .tint(Palette.blue)
     }
@@ -115,8 +120,6 @@ struct SettingsView: View {
                       isGood: model.locationStatus == .authorizedAlways)
             StatusRow(symbol: "scope", tint: .indigo, title: "Precise Location",
                       value: model.isPrecise ? "On" : "Off", isGood: model.isPrecise)
-            StatusRow(symbol: "figure.walk", tint: .green, title: "Motion & Fitness",
-                      value: model.motionAllowed ? "On" : "Off", isGood: model.motionAllowed)
             StatusRow(symbol: "bell.badge.fill", tint: .red, title: "Notifications",
                       value: model.notificationsAllowed ? "On" : "Off", isGood: model.notificationsAllowed)
             StatusRow(symbol: "lock.shield.fill", tint: .teal, title: "Phone passcode",
@@ -160,6 +163,23 @@ struct SettingsView: View {
             }
         }
         .foregroundStyle(Palette.ink)
+    }
+
+    // MARK: - Developer
+
+    private var developerSection: some View {
+        Section {
+            NavigationLink {
+                BeaconModeView()
+            } label: {
+                RowLabel(symbol: "dot.radiowaves.left.and.right", tint: .blue, title: "Beacon mode",
+                         detail: "Make this iPhone a study area's beacon, for demos.")
+            }
+        } header: {
+            Text("Developer")
+        } footer: {
+            Text("TestFlight builds only.")
+        }
     }
 
     /// Later annoyances are redder.

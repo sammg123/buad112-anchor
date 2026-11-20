@@ -26,6 +26,10 @@ struct DoneView: View {
                     row("Buzzes you sat through", "\(Ladder.buzzCount(phoneSeconds: session.phoneSeconds))", red: false)
                     Divider()
                     row("Time away (paused)", Format.clock(session.awaySeconds), red: false)
+                    if session.spoofedReadings > 0 {
+                        Divider()
+                        row("Faked locations caught", "\(session.spoofedReadings)", red: true)
+                    }
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 6)

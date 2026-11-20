@@ -1,6 +1,6 @@
 {
  "version": 1,
- "source": "Building outline from OpenStreetMap way 406923908 (c) OpenStreetMap contributors, ODbL",
+ "source": "Leavey Library's outline is OpenStreetMap way 406923908 (c) OpenStreetMap contributors, ODbL. Study areas and beacon ids are PLACEHOLDERS until real beacons are placed; one Anchor uuid, major = zone, minor = area.",
  "zones": [
   {
    "id": "usc-leavey-library",
@@ -126,6 +126,38 @@
      34.022024,
      -118.283156
     ]
+   ],
+   "studyAreas": [
+    {
+     "id": "study-room-2",
+     "name": "Study Room 2",
+     "floor": 1,
+     "beacon": {
+      "uuid": "D0236BD0-F73D-463D-930C-7803C1B2E8A3",
+      "major": 1,
+      "minor": 2
+     }
+    },
+    {
+     "id": "lower-level-study",
+     "name": "Lower Level Study",
+     "floor": -1,
+     "beacon": {
+      "uuid": "D0236BD0-F73D-463D-930C-7803C1B2E8A3",
+      "major": 1,
+      "minor": 10
+     }
+    },
+    {
+     "id": "second-floor-quiet",
+     "name": "2nd Floor Quiet Study",
+     "floor": 2,
+     "beacon": {
+      "uuid": "D0236BD0-F73D-463D-930C-7803C1B2E8A3",
+      "major": 1,
+      "minor": 20
+     }
+    }
    ]
   }
  ]

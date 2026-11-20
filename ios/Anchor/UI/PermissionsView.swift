@@ -14,21 +14,18 @@ struct PermissionsView: View {
                     .frame(width: 64, height: 64)
                     .overlay(AnchorMark(size: 34))
                     .shadow(color: Palette.blue.opacity(0.3), radius: 12, y: 8)
-                Text("Study where you sit.\nLeave to quit.")
+                Text("No-phone zones.\nLeave to quit.")
                     .font(.system(size: 34, weight: .bold))
                     .tracking(-0.8)
                     .accessibilityAddTraits(.isHeader)
-                Text("Pick up your phone at your spot and Anchor makes it miserable. Walk away and it lets you go.")
+                Text("In a study area, picking up your phone is miserable. Walk out and it lets you go.")
                     .font(.body)
                     .foregroundStyle(Palette.secondary)
             }
             VStack(spacing: 12) {
                 PermissionRow(symbol: "location.fill", tint: Palette.blue, title: "Location", tag: "REQUIRED",
-                              detail: "To know when you're in a no-phone zone. Choose Always and keep Precise Location on.",
+                              detail: "To know when you're in a no-phone zone. Choose Always so Anchor notices even when it's closed, and keep Precise Location on.",
                               done: model.hasLocation)
-                PermissionRow(symbol: "figure.walk", tint: Palette.blue, title: "Motion & Fitness", tag: "REQUIRED",
-                              detail: "Tells Anchor when your phone is sitting still, so indoor GPS drift can't unlock Stop.",
-                              done: model.motionAllowed)
                 PermissionRow(symbol: "bell.fill", tint: Palette.red, title: "Notifications", tag: "RECOMMENDED",
                               detail: "The annoying part. Without them Anchor can't buzz you while you scroll.",
                               done: model.notificationsAllowed)
@@ -48,10 +45,8 @@ struct PermissionsView: View {
     @ViewBuilder
     private var buttons: some View {
         VStack(spacing: 10) {
-            if model.locationDenied || model.motionDenied {
-                Text(model.locationDenied
-                     ? "Location is off for Anchor. Turn it on in Settings › Anchor › Location."
-                     : "Motion & Fitness is off for Anchor. Turn it on in Settings › Anchor.")
+            if model.locationDenied {
+                Text("Location is off for Anchor. Turn it on in Settings › Anchor › Location.")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Palette.red)
                 Button("Open Settings") {
@@ -61,11 +56,6 @@ struct PermissionsView: View {
             } else if !model.hasLocation {
                 Button("Allow Location") { model.requestLocation() }
                     .buttonStyle(ProminentButtonStyle())
-            } else if !model.isReadyToStart {
-                Button("Allow Motion & Fitness") {
-                    Task { await model.requestMotion() }
-                }
-                .buttonStyle(ProminentButtonStyle())
             } else if !model.notificationsAllowed && !askedNotifications {
                 Button("Turn On Buzzing") {
                     Task {

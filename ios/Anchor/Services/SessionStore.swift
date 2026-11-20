@@ -9,6 +9,7 @@ struct SessionStore {
     private static let configKey = "anchor.config.v2"
     private static let onboardedKey = "anchor.onboarded.v1"
     private static let arrivalsKey = "anchor.arrivals.v1"
+    private static let autoStartKey = "anchor.autostart.v1"
 
     private let defaults: UserDefaults
 
@@ -19,6 +20,12 @@ struct SessionStore {
     var hasOnboarded: Bool {
         get { defaults.bool(forKey: Self.onboardedKey) }
         nonmutating set { defaults.set(newValue, forKey: Self.onboardedKey) }
+    }
+
+    /// Auto-start: begin a session by itself on walking into a no-phone zone.
+    var autoStart: Bool {
+        get { defaults.bool(forKey: Self.autoStartKey) }
+        nonmutating set { defaults.set(newValue, forKey: Self.autoStartKey) }
     }
 
     /// When each zone's arrival notice last went out (seconds since 1970), so the cooldown survives relaunches.

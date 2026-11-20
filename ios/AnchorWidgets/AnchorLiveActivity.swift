@@ -9,18 +9,19 @@ private typealias State = AnchorActivityAttributes.ContentState
 struct AnchorLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AnchorActivityAttributes.self) { context in
-            LockScreenView(state: context.state)
+            LockScreenView(state: context.state, place: context.attributes.place)
                 .activityBackgroundTint(Color.black.opacity(0.35))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             let state = context.state
+            let place = context.attributes.place
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     Badge(mode: state.mode, size: 40).padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(caption(state)).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                        Text(caption(state, place: place)).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
                         clockWithUnit(state, size: 30, unitSize: 14)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -59,12 +60,13 @@ private func modeColor(_ mode: State.Mode) -> Color {
     }
 }
 
-private func caption(_ state: State) -> String {
+/// The top line: where you are while studying ("Leavey Library · Study Room 2"), otherwise what's happening.
+private func caption(_ state: State, place: String?) -> String {
     switch state.mode {
-    case .studying: "Studying · phone down"
+    case .studying: place ?? "Studying · phone down"
     case .grace: "Grace period"
     case .onPhone: "On your phone"
-    case .away: "Away · phone is free"
+    case .away: "Out of the zone · phone is free"
     }
 }
 
@@ -171,13 +173,14 @@ private struct SideStat: View {
 
 private struct LockScreenView: View {
     let state: State
+    let place: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 Badge(mode: state.mode, size: 40)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(caption(state))
+                    Text(caption(state, place: place))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)

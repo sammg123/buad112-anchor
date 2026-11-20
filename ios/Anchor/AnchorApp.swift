@@ -31,6 +31,7 @@ struct RootView: View {
         Group {
             switch model.screen {
             case .permissions: PermissionsView()
+            case .precise: PreciseLocationView()
             case .start: StartView()
             case .session: SessionView()
             case .done:

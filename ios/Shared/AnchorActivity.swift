@@ -22,6 +22,13 @@ struct AnchorActivityAttributes: ActivityAttributes {
     }
 
     let minutes: Int
+    /// "Leavey Library · Study Room 2". Optional so a card started by an older build still loads.
+    let place: String?
+
+    init(minutes: Int, place: String? = nil) {
+        self.minutes = minutes
+        self.place = place
+    }
 }
 
 enum AnchorPalette {

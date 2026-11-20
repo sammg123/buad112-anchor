@@ -5,13 +5,13 @@ import SwiftUI
 import UIKit
 import os
 
-/// Runs a session: turns location, the lock state and Anchor being on screen into the session's three clocks,
-/// and turns the session into buzzes, the voice, the alarm and the Live Activity. Every rule lives in `Session`,
-/// `Ladder` and `Escalation`; this only wires them up.
+/// Runs a session: turns where you are (no-phone zones, from GPS and study-area beacons), the lock state and Anchor
+/// being on screen into the session's three clocks, and turns the session into buzzes, the voice, the alarm and the
+/// Live Activity. Every rule lives in `Session`, `Ladder`, `Escalation` and `ZoneRules`; this only wires them up.
 @MainActor
 @Observable
 final class AppModel {
-    enum Screen: Equatable { case permissions, start, session, done }
+    enum Screen: Equatable { case permissions, precise, start, session, done }
 
     /// Unlocking straight into Anchor shows Anchor in the background for a moment; a "pickup" this short that ends
     /// in Anchor is taken back.
@@ -26,6 +26,13 @@ final class AppModel {
     #endif
     /// Top the buzz ladder up when fewer than this many seconds of it are left.
     private static let ladderRefillSeconds = 60.0
+    /// Arrival notices and auto-starts for the same zone and area at most this often (also after a session ends
+    /// there, so a finished session doesn't start itself again).
+    private static let arrivalCooldownSeconds = 30.0 * 60
+    /// A start from a notification gives up if being in the zone can't be confirmed this soon.
+    private static let confirmZoneSeconds = 20.0
+    /// The test host app must not open the location monitor (it can only be opened once per process).
+    private static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     private(set) var session: Session?
     private(set) var finished: Session?
@@ -33,13 +40,13 @@ final class AppModel {
     private(set) var now = Date()
     private(set) var locationStatus: CLAuthorizationStatus = .notDetermined
     private(set) var notificationsAllowed = false
-    private(set) var motionAllowed = ActivityMonitor.isAuthorized
-    /// No-phone zones from zones.json.
-    private(set) var zones: [Zone] = []
-    /// Cleaned-up GPS (bad readings and blunders dropped, the last 30 s averaged).
-    private(set) var filter = PresenceFilter()
-    /// Inside or outside the running session's zone, with edge slack and drift protection.
-    private(set) var presence = ZonePresence.inside
+    private(set) var isPrecise = false
+    /// Every zone, your cleaned-up position against each, and which study-area beacon is close.
+    let tracker: ZoneTracker
+    /// Beacon mode (Settings, TestFlight only): this phone broadcasts a study area's beacon.
+    let broadcaster = BeaconBroadcaster()
+    /// Zones iOS says you're near (their wake circle); GPS and ranging stay on while there are any.
+    private(set) var nearZones: Set<String> = []
     private(set) var hasPasscode = true
     private(set) var isFindingSpot = false
     private(set) var hasOnboarded: Bool
@@ -54,10 +61,11 @@ final class AppModel {
         #endif
     }()
     var minutes: Int { didSet { savePreferences() } }
-    var radiusMeters: Double { didSet { savePreferences() } }
     var grayscale: Bool { didSet { savePreferences() } }
     var library: Bool { didSet { savePreferences() } }
     var graceSeconds: Double { didSet { savePreferences() } }
+    /// Start a session by itself when you walk into a no-phone zone, instead of asking first.
+    var autoStart: Bool { didSet { store.autoStart = autoStart } }
     var notice: String?
 
     private let store = SessionStore()
@@ -65,9 +73,7 @@ final class AppModel {
     private let buzzer = Buzzer()
     private let escalator = Escalator()
     private let liveActivity = LiveActivityController()
-    private let activity = ActivityMonitor()
-    private let zoneStore: ZoneStore = BundledZoneStore()
-    private static let arrivalNoticeCooldownSeconds = 30.0 * 60
+    private let beacons = BeaconService()
     let volumeGuard = VolumeGuard()
     /// Launched in the background (iOS relaunching a session), Anchor is not on screen until a scene says so.
     private var isAppActive = UIApplication.shared.applicationState != .background
@@ -80,8 +86,7 @@ final class AppModel {
     /// After a lock notice, iOS can still say "unlocked" for a moment; only believe it again after this long.
     private static let relockQuietSeconds = 15.0
     private var shortcutGraceUntil = Date.distantPast
-    private var pendingConfig: SessionConfig?
-    /// A zone start (from the arrival notice) waiting for a fresh reading that confirms you're there.
+    /// A zone start (from the arrival notice) waiting until being in the zone is confirmed.
     private var pendingZoneID: String?
     /// The session ended in the background in black and white; color comes back when Anchor is opened.
     private var needsColorBack = false
@@ -89,81 +94,85 @@ final class AppModel {
     private var ticker: Timer?
     private var observers: [NSObjectProtocol] = []
     #if DEBUG
-    /// Simulator only: start a zone session as soon as a fix lands inside one.
+    /// Simulator only: start a zone session as soon as you're in one.
     private var autoStartsZone = false
     #endif
 
     init() {
         let saved = store.loadConfig()
         minutes = saved?.studyMinutes ?? SetupInput.defaultMinutes
-        radiusMeters = AnchorRules.clampedRadius(saved?.radiusMeters ?? AnchorRules.defaultRadiusMeters)
         grayscale = saved?.grayscale ?? false
         library = saved?.isLibrary ?? false
         graceSeconds = saved?.graceSeconds ?? PickupRule.defaultGraceSeconds
+        autoStart = store.autoStart
         hasOnboarded = store.hasOnboarded
         finished = store.loadFinished()
+        tracker = ZoneTracker(zones: Self.loadZones())
         locationStatus = location.status
+        isPrecise = location.isPrecise
         location.onFix = { [weak self] fix in self?.received(fix) }
-        location.onAuthorizationChange = { [weak self] status in
-            guard let self else { return }
-            self.locationStatus = status
-            // Arrival wake-ups need Always; register them again once it's granted.
-            if status == .authorizedAlways { self.location.watch(zones: self.zones) }
+        location.onAuthorizationChange = { [weak self] status in self?.authorizationChanged(status) }
+        beacons.onSighting = { [weak self] area, proximity, accuracy in
+            self?.sighted(area, proximity: proximity, accuracy: accuracy)
         }
-        loadZones()
-        location.onEnterZone = { [weak self] id in self?.arrived(atZone: id) }
-        location.watch(zones: zones)
-        activity.start()
+        if tracker.zones.isEmpty { notice = "Anchor couldn't read its zones file." }
+        startZoneWatch()
         observeZoneStarts()
         screenWatcher.onChange = { [weak self] blank in self?.screenChanged(blank: blank) }
         screenWatcher.start()
         observeLockState()
         restore()
         location.startForeground()
+        updateTracking()
         #if DEBUG
         // Simulator screenshots only.
         let args = ProcessInfo.processInfo.arguments
         if args.contains("-onboarded") { hasOnboarded = true }
-        if args.contains("-autostart"), session == nil { dropAnchor() }
         autoStartsZone = args.contains("-autozone")
+        if args.contains("-fakeBeacon") { startFakeBeacon() }
         #endif
     }
+
+    #if DEBUG
+    /// Simulator only (it has no Bluetooth): pretend the first study area's beacon is near, every second.
+    private func startFakeBeacon() {
+        guard let zone = tracker.zones.first(where: { !$0.studyAreas.isEmpty }), let area = zone.studyAreas.first else { return }
+        let key = AreaKey(zoneID: zone.id, areaID: area.id)
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sighted(key, proximity: .near, accuracy: 2) }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    #endif
 
     // MARK: - What the screens read
 
     var screen: Screen {
         if session != nil { return .session }
         if finished != nil { return .done }
-        if !hasOnboarded || !isReadyToStart { return .permissions }
+        if !hasOnboarded || !hasLocation { return .permissions }
+        if !isPrecise { return .precise }
         return .start
     }
 
     var hasLocation: Bool { locationStatus == .authorizedAlways || locationStatus == .authorizedWhenInUse }
-    /// Location and Motion & Fitness are both required: motion tells GPS drift from walking out.
-    var isReadyToStart: Bool {
-        PermissionGate.isReady(location: hasLocation, motion: motionAllowed, motionSupported: ActivityMonitor.isSupported)
-    }
+    /// Location and Precise Location are required; zones can't work on approximate location.
+    var isReadyToStart: Bool { PermissionGate.isReady(location: hasLocation, precise: isPrecise) }
 
     var locationDenied: Bool { locationStatus == .denied || locationStatus == .restricted }
 
     var isStopUnlocked: Bool { session?.away ?? false }
 
-    /// The zone you're standing in right now (start screen), judged with the same edge slack as coming back in.
-    var currentZone: Zone? {
-        guard let here = filter.smoothed(at: now) else { return nil }
-        let slack = min(here.accuracy * 0.5, ZonePresence.enterSlackMeters)
-        return zones.first { $0.depth(of: here.point) >= -slack }
-    }
+    /// Where you are: in a study area, in a zone's building but not a study area, or outside all zones.
+    var place: PlaceStatus { tracker.place(at: now) }
 
-    /// Roughly how far to walk before Stop unlocks: out past the edge by the leave margin.
-    var metersToUnlock: Double? {
-        guard let session, let here = filter.smoothed(at: now) else { return nil }
-        let margin = max(ZonePresence.minLeaveMarginMeters, here.accuracy)
-        return max(1, session.area.depth(of: here.point) + margin)
-    }
+    /// The zone (and study area) you could start a session in right now.
+    var startable: (zone: Zone, area: StudyArea?)? { tracker.lockingZone(at: now) }
 
-    /// GPS is only as sharp as iOS allows: with Precise Location off, zones can't work.
-    var isPrecise: Bool { location.isPrecise }
+    /// Meters to the nearest way out of a building (its edge), while you're inside one; nil otherwise.
+    func metersToEdge(of zone: Zone) -> Double? {
+        tracker.depth(in: zone).flatMap { $0 > 0 ? $0 : nil }
+    }
 
     /// The session as of this second, for display.
     var live: Session? { session?.advanced(to: now) }
@@ -173,14 +182,6 @@ final class AppModel {
     func requestLocation() {
         if locationStatus == .notDetermined { location.requestWhenInUse() }
     }
-
-    func requestMotion() async {
-        _ = await activity.requestPermission()
-        motionAllowed = ActivityMonitor.isAuthorized
-        if motionAllowed { activity.start() }
-    }
-
-    var motionDenied: Bool { ActivityMonitor.isDenied }
 
     func requestNotifications() async {
         notificationsAllowed = await buzzer.requestAuthorization()
@@ -193,89 +194,70 @@ final class AppModel {
 
     func refreshPermissions() async {
         locationStatus = location.status
+        isPrecise = location.isPrecise
         hasPasscode = LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
         notificationsAllowed = await buzzer.isAuthorized()
-        motionAllowed = ActivityMonitor.isAuthorized
-        if motionAllowed { activity.start() }
         if locationStatus == .authorizedWhenInUse, !Self.skipsAlwaysPrompt { location.requestAlways() }
-        if hasLocation, !location.isPrecise { location.requestPrecise() }
+    }
+
+    /// The Precise Location screen's button: iOS asks to turn it on until Anchor is closed.
+    func requestPrecise() {
+        location.requestPrecise()
+    }
+
+    private func authorizationChanged(_ status: CLAuthorizationStatus) {
+        locationStatus = status
+        isPrecise = location.isPrecise
+        // Arrival wake-ups need Always; make sure they're registered once it's granted.
+        if status == .authorizedAlways { startZoneWatch() }
     }
 
     // MARK: - Session lifecycle
 
-    func dropAnchor() {
-        guard isReadyToStart else {
-            notice = "Anchor needs Location and Motion & Fitness. Allow them in Settings › Anchor."
-            return
-        }
-        guard requirePrecise() else { return }
-        let config = SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),
-                                   grayscale: grayscale, library: library, grace: graceSeconds)
-        if let fix, isUsableAnchor(fix) {
-            begin(config, in: anchorZone(at: fix, config: config))
-        } else {
-            pendingConfig = config
-            isFindingSpot = true
-            location.refresh()
-        }
-    }
-
-    /// Start a session in a no-phone zone (from the start screen or the arrival notification).
+    /// Start a session in a no-phone zone (the start screen, the arrival notice, or auto-start). It only starts once
+    /// you're confirmed in the zone, so an old notification tapped at home can't lock anything.
     func startZoneSession(_ zoneID: String) {
-        guard session == nil, let zone = zones.first(where: { $0.id == zoneID }) else { return }
+        guard session == nil, let zone = tracker.zones.first(where: { $0.id == zoneID }) else { return }
         guard isReadyToStart else {
-            notice = "Anchor needs Location and Motion & Fitness. Allow them in Settings › Anchor."
+            notice = "Anchor needs Location with Precise Location on. Turn them on in Settings › Anchor › Location."
             return
         }
-        guard requirePrecise() else { return }
         now = Date()
-        if currentZone?.id == zone.id {
-            begin(zoneConfig(), in: zone)
-        } else {
-            // From a notification, possibly an old one: check you're really there before locking anything.
-            pendingZoneID = zone.id
-            isFindingSpot = true
-            location.refresh()
+        if case .locked(let areaID) = tracker.lock(for: zone, at: now) {
+            begin(in: zone, areaID: areaID)
+            return
+        }
+        pendingZoneID = zone.id
+        isFindingSpot = true
+        location.refresh()
+        updateTracking()
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.confirmZoneSeconds))
+            self?.givePendingUp(zone)
         }
     }
 
-    private func zoneConfig() -> SessionConfig {
-        SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),
-                      grayscale: grayscale, library: library, grace: graceSeconds)
-    }
-
-    /// Zones can't work on approximate location; ask iOS for Precise and say why.
-    private func requirePrecise() -> Bool {
-        guard location.isPrecise else {
-            location.requestPrecise()
-            notice = "Anchor needs Precise Location to tell where zones start. Turn it on in Settings › Anchor › Location."
-            return false
-        }
-        return true
-    }
-
-    /// A zone start waiting for a fresh reading: start if you're in the zone, give up if you're clearly not.
     private func checkPendingZone() {
-        guard let id = pendingZoneID, let zone = zones.first(where: { $0.id == id }),
-              let here = filter.smoothed(at: now) else { return }
-        let depth = zone.depth(of: here.point)
-        if depth >= -min(here.accuracy * 0.5, ZonePresence.enterSlackMeters) {
-            pendingZoneID = nil
-            begin(zoneConfig(), in: zone)
-        } else if depth <= -max(ZonePresence.minLeaveMarginMeters, here.accuracy) {
-            pendingZoneID = nil
-            isFindingSpot = false
-            notice = "You're not in \(zone.name) right now, so there's nothing to lock."
-        }
+        guard let id = pendingZoneID, let zone = tracker.zones.first(where: { $0.id == id }),
+              case .locked(let areaID) = tracker.lock(for: zone, at: now) else { return }
+        begin(in: zone, areaID: areaID)
+    }
+
+    private func givePendingUp(_ zone: Zone) {
+        guard pendingZoneID == zone.id, session == nil else { return }
+        cancelFindingSpot()
+        notice = zone.usesWholeBuilding
+            ? "You're not in \(zone.name) right now, so there's nothing to lock."
+            : "You're not in one of \(zone.name)'s study areas right now, so there's nothing to lock."
     }
 
     func cancelFindingSpot() {
-        pendingConfig = nil
         pendingZoneID = nil
         isFindingSpot = false
+        updateTracking()
     }
 
-    /// Stop is only allowed away from the anchor (or once the timer is done, which ends the session itself).
+    /// Stop is only allowed out of the zone (or once the timer is done, which ends the session itself).
     func stop() {
         guard let current = session?.advanced(to: Date()), current.away else { return }
         end(current)
@@ -284,8 +266,6 @@ final class AppModel {
     func togglePause() {
         guard Self.showsDevTools, session != nil else { return }
         isPaused.toggle()
-        // A leave that was half-way when you paused must not complete the instant you unpause.
-        presence = ZonePresence(state: presence.state, pendingSince: nil)
         reconcile()
     }
 
@@ -321,6 +301,9 @@ final class AppModel {
             // A session started from a notification while iOS still had Anchor in the background gets its card now.
             if let current = session { liveActivity.start(for: current, at: Date()) }
             Task { await refreshPermissions() }
+        }
+        updateTracking()
+        if active {
             if needsColorBack {
                 needsColorBack = false
                 runShortcut(.color)
@@ -329,50 +312,100 @@ final class AppModel {
         reconcile()
     }
 
+    // MARK: - Zones
+
+    private static func loadZones() -> [Zone] {
+        do {
+            return try BundledZoneStore().zones()
+        } catch {
+            log.error("zones file: \(String(describing: error), privacy: .public)")
+            return []
+        }
+    }
+
+    /// iOS watches a circle around each zone and each study area's beacon, and wakes Anchor near them.
+    private func startZoneWatch() {
+        guard !Self.isRunningTests, !tracker.zones.isEmpty else { return }
+        let zones = tracker.zones
+        Task {
+            await ZoneWatch.shared.watch(zones) { [weak self] event in
+                Task { @MainActor in self?.zoneEvent(event) }
+            }
+        }
+    }
+
+    private func zoneEvent(_ event: ZoneWatch.Event) {
+        switch event {
+        case .nearZone(let id, let isNear):
+            nearZones = isNear ? nearZones.union([id]) : nearZones.subtracting([id])
+        case .areaInRange(let key, let inRange) where inRange:
+            nearZones = nearZones.union([key.zoneID])
+        case .areaInRange:
+            break
+        }
+        updateTracking()
+    }
+
+    /// GPS in the background and beacon ranging run during a session, near a zone, or while confirming a start;
+    /// ranging also runs whenever Anchor is on screen.
+    private func updateTracking() {
+        let near = !nearZones.isEmpty || pendingZoneID != nil
+        location.setNearZone(near && session == nil)
+        if isAppActive || session != nil || near {
+            beacons.startRanging(tracker.allZones)
+        } else {
+            beacons.stopRanging()
+        }
+    }
+
     private func received(_ newFix: CLLocation) {
         fix = newFix
-        filter = filter.adding(LocationFix(point: newFix.point, accuracy: newFix.horizontalAccuracy,
-                                           time: newFix.timestamp))
-        if let config = pendingConfig, isUsableAnchor(newFix) {
-            begin(config, in: anchorZone(at: newFix, config: config))
-            return
-        }
         now = Date()
-        if pendingZoneID != nil {
-            checkPendingZone()
-            if session != nil { return }
+        let verdict = tracker.received(newFix.reading, at: now)
+        if verdict == .spoofed, let current = session {
+            // A faked reading: ignored, you count as still in the zone, and the session remembers it.
+            tracker.spoofed(in: current.area.id, at: now)
+            Self.log.notice("spoofed location reading during a session")
+            apply(current.countingSpoof().advanced(to: now))
         }
+        zoneChanged()
+    }
+
+    private func sighted(_ area: AreaKey, proximity: BeaconProximity, accuracy: Double) {
+        now = Date()
+        tracker.sighted(area, proximity: proximity, accuracy: accuracy, at: now)
+        zoneChanged()
+    }
+
+    private func zoneChanged() {
+        if session != nil { return reconcile() }
+        if pendingZoneID != nil { return checkPendingZone() }
         #if DEBUG
-        if autoStartsZone, session == nil, let zone = currentZone {
+        if autoStartsZone, let here = startable {
             autoStartsZone = false
-            startZoneSession(zone.id)
-            return
+            return begin(in: here.zone, areaID: here.area?.id)
         }
         #endif
-        reconcile()
+        checkArrival()
     }
 
-    private func anchorZone(at fix: CLLocation, config: SessionConfig) -> Zone {
-        Zone.circle(center: fix.point, radius: config.radiusMeters)
-    }
-
-    private func loadZones() {
-        do {
-            zones = try zoneStore.zones()
-        } catch {
-            zones = []
-            notice = "Anchor couldn't read its zones file. Drop an anchor instead."
+    /// You walked into a zone with no session running: start one (Auto-start) or offer it, at most every
+    /// 30 minutes per zone and area. On screen without Auto-start, the start screen already offers it.
+    private func checkArrival() {
+        guard session == nil, let here = startable, autoStart || !isAppActive else { return }
+        let key = Self.arrivalKey(here.zone, here.area?.id)
+        if let last = store.lastArrival(atZone: key), now.timeIntervalSince(last) < Self.arrivalCooldownSeconds { return }
+        store.saveArrival(atZone: key, at: now)
+        if autoStart {
+            begin(in: here.zone, areaID: here.area?.id)
+        }
+        if !isAppActive {
+            buzzer.zoneArrival(here.zone, area: here.area, started: autoStart)
         }
     }
 
-    /// iOS woke Anchor at a zone's wake circle: offer a session, once in a while at most.
-    private func arrived(atZone id: String) {
-        guard session == nil, let zone = zones.first(where: { $0.id == id }) else { return }
-        let now = Date()
-        // Persisted: iOS relaunches Anchor fresh for each arrival, and memory alone would forget.
-        if let last = store.lastArrival(atZone: id), now.timeIntervalSince(last) < Self.arrivalNoticeCooldownSeconds { return }
-        store.saveArrival(atZone: id, at: now)
-        buzzer.zoneArrival(zone)
+    private static func arrivalKey(_ zone: Zone, _ areaID: String?) -> String {
+        [zone.id, areaID].compactMap { $0 }.joined(separator: "/")
     }
 
     /// The arrival notification's Start button.
@@ -428,16 +461,18 @@ final class AppModel {
 
     // MARK: - The loop
 
-    private func begin(_ config: SessionConfig, in zone: Zone) {
-        pendingConfig = nil
+    private func begin(in zone: Zone, areaID: String?) {
         pendingZoneID = nil
         isFindingSpot = false
         finished = nil
         store.saveFinished(nil)
+        let config = SessionConfig(studyMinutes: minutes, grayscale: grayscale, library: library, grace: graceSeconds,
+                                   zoneID: zone.id, areaID: areaID)
         let started = Session.start(config: config, zone: zone, at: Date())
-        // You start inside (that's where you started it); GPS has to show you leaving.
-        presence = .inside
+        store.saveArrival(atZone: Self.arrivalKey(zone, areaID), at: Date())
+        tracker.extraZone = nil
         location.startSession()
+        updateTracking()
         escalator.startKeepAlive()
         volumeGuard.setEnforcing(!config.isLibrary)
         startTicker()
@@ -457,7 +492,8 @@ final class AppModel {
         // A ladder scheduled before Anchor was ended would keep buzzing for nobody.
         buzzer.cancelLadder()
         liveActivity.adoptExisting()
-        presence = saved.away ? ZonePresence(state: .outside, pendingSince: nil) : .inside
+        // A session saved before zones keeps its circle.
+        tracker.extraZone = saved.zone == nil ? saved.area : nil
         location.startSession()
         escalator.startKeepAlive()
         volumeGuard.setEnforcing(!saved.config.isLibrary)
@@ -566,10 +602,10 @@ final class AppModel {
 
     private func announceAway(_ away: Bool) {
         if away {
-            buzzer.notify(id: "anchor-away", title: "You left your spot",
+            buzzer.notify(id: "anchor-away", title: "You left the no-phone zone",
                           body: "Your phone is free and the timer is paused. Stop is unlocked.")
         } else {
-            buzzer.notify(id: "anchor-back", title: "Back at your spot",
+            buzzer.notify(id: "anchor-back", title: "Back in the no-phone zone",
                           body: "The timer is running again. So is the buzzing, if you pick up your phone.")
         }
     }
@@ -585,7 +621,13 @@ final class AppModel {
         liveActivity.end()
         if !last.isComplete || isAppActive { buzzer.cancelDone() }
         location.stopSession()
+        if let zone = last.zone {
+            // Still sitting there when it ends: don't start another one by itself.
+            store.saveArrival(atZone: Self.arrivalKey(zone, last.config.areaID), at: Date())
+        }
+        tracker.extraZone = nil
         session = nil
+        updateTracking()
         finished = last
         store.saveRunning(nil)
         store.saveFinished(last)
@@ -594,15 +636,11 @@ final class AppModel {
     }
 
     private func savePreferences() {
-        store.saveConfig(SessionConfig(studyMinutes: minutes, radiusMeters: radiusMeters, grayscale: grayscale,
-                                       library: library, grace: graceSeconds))
+        store.saveConfig(SessionConfig(studyMinutes: minutes, grayscale: grayscale, library: library,
+                                       grace: graceSeconds))
     }
 
     // MARK: - Location rules
-
-    private func isUsableAnchor(_ fix: CLLocation) -> Bool {
-        AnchorRules.isUsableAnchor(accuracy: fix.horizontalAccuracy, age: -fix.timestamp.timeIntervalSinceNow)
-    }
 
     /// In case a lock or unlock notice was missed, ask iOS directly. Right after a lock notice its answer can lag,
     /// so "unlocked" is only believed after a quiet spell. Without a passcode iOS always says unlocked: skip it.
@@ -617,18 +655,16 @@ final class AppModel {
         }
     }
 
-    /// Location decides: the cleaned-up GPS against the session's zone, with edge slack, a dwell, and no leaving
-    /// while the phone sits still. Nil until there is a usable reading.
+    /// Location decides: GPS against the zone's building, and for zones with study areas, a close study-area
+    /// beacon. Nil when there isn't enough to go on (keep what was true).
     private func isAway() -> Bool? {
-        guard let session, let here = filter.smoothed(at: now) else { return nil }
-        presence = presence.updated(depth: session.area.depth(of: here.point), accuracy: here.accuracy,
-                                    isStationary: activity.isStationary, at: now)
-        return presence.state == .outside
+        guard let session else { return nil }
+        switch tracker.lock(for: session.area, at: now) {
+        case .locked: return false
+        case .free: return true
+        case .undecided: return nil
+        }
     }
-}
-
-extension CLLocation {
-    var point: GeoPoint { GeoPoint(lat: coordinate.latitude, lng: coordinate.longitude) }
 }
 
 extension GeoPoint {

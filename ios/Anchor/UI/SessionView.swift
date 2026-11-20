@@ -35,13 +35,7 @@ struct SessionView: View {
         let away = session.away
         let tint = away ? Palette.away : Palette.red
         return Map(position: $camera) {
-            MapPolygon(coordinates: session.area.polygon.map(\.coordinate))
-                .foregroundStyle(tint.opacity(0.18))
-                .stroke(tint.opacity(0.8), lineWidth: 2)
-            Annotation(session.area.name, coordinate: session.area.center.coordinate, anchor: .center) {
-                ZoneLabel(name: session.area.name)
-            }
-            UserAnnotation()
+            ZoneLayers(zones: [session.area], tint: tint, accuracy: model.tracker.accuracyCircle)
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
         .mapControlVisibility(.hidden)
@@ -177,7 +171,7 @@ private struct ZoneCard: View {
                     .contentTransition(.symbolEffect(.replace))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(out ? "OUTSIDE THE ZONE" : "INSIDE \(session.area.name.uppercased())")
+                    Text(out ? "OUTSIDE THE ZONE" : session.placeName.uppercased())
                         .font(.caption.weight(.bold))
                         .tracking(0.4)
                         .foregroundStyle(out ? Palette.away : Palette.red)
@@ -214,7 +208,11 @@ private struct ZoneCard: View {
 
     private func hint(out: Bool) -> String {
         if out { return "The timer is paused. Walk back in to keep going." }
-        guard let meters = model.metersToUnlock else { return "Waiting for GPS…" }
-        return "About \(Int(meters.rounded(.up))) m to the edge and out."
+        let zone = session.area
+        if let area = zone.area(session.config.areaID) {
+            return "Walk out of \(area.name) to unlock Stop. The lobby and café are free."
+        }
+        guard let meters = model.metersToEdge(of: zone) else { return "Leave \(zone.name) to unlock Stop." }
+        return "About \(Int(meters.rounded(.up))) m to the nearest way out of \(zone.name)."
     }
 }

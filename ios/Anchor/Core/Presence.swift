@@ -1,101 +1,155 @@
 import Foundation
 
-/// One location reading.
-struct LocationFix: Equatable, Sendable {
-    let point: GeoPoint
-    /// Meters, as Core Location reports it (negative means invalid).
-    let accuracy: Double
-    let time: Date
-}
+/// Inside or outside one building's outline, without flicker. Each reading is a circle of its accuracy:
+/// - mostly inside the outline: inside, right away;
+/// - wholly outside: outside, but only after 3 such readings in a row *and* 10 s, whichever comes later;
+/// - straddling the edge: says nothing, and breaks a run of outside readings.
+/// With no usable reading for 30 s (indoor GPS is often worse than 20 m) it no longer claims to know.
+struct BuildingPresence: Equatable, Sendable {
+    enum State: Equatable, Sendable { case unknown, inside, outside }
 
-/// Cleans up GPS the way location-sharing apps do: readings worse than 65 m are dropped, a jump nobody could walk
-/// is rejected as a blunder, and the last 30 s are averaged with sharper readings counting more.
-struct PresenceFilter: Equatable, Sendable {
-    static let maxAccuracyMeters = 65.0
-    static let windowSeconds = 30.0
-    /// A new reading farther than this many accuracies (plus walking speed) from the average is a blunder.
-    static let blunderFactor = 3.0
-    static let maxWalkingSpeed = 3.0
-    /// A cleaned-up position older than this decides nothing (GPS stopped, Anchor was paused by iOS).
-    static let maxStaleSeconds = 15.0
-
-    let fixes: [LocationFix]
-
-    init(fixes: [LocationFix] = []) {
-        self.fixes = fixes
-    }
-
-    func adding(_ fix: LocationFix) -> PresenceFilter {
-        // A reading older than the newest one (a cached fix) is ignored rather than allowed to reshape the window.
-        if let newest = fixes.last, fix.time < newest.time { return self }
-        let recent = fixes.filter { fix.time.timeIntervalSince($0.time) <= Self.windowSeconds }
-        guard fix.accuracy >= 0, fix.accuracy <= Self.maxAccuracyMeters else { return PresenceFilter(fixes: recent) }
-        // Compared with the latest accepted reading, not the average, so a steady walk never looks like a jump.
-        if let latest = recent.last {
-            let jump = Geo.distanceMeters(latest.point, fix.point)
-            let allowed = Self.blunderFactor * max(fix.accuracy, latest.accuracy)
-                + Self.maxWalkingSpeed * fix.time.timeIntervalSince(latest.time)
-            if jump > allowed { return PresenceFilter(fixes: recent) }
-        }
-        return PresenceFilter(fixes: recent + [fix])
-    }
-
-    /// The cleaned-up position, or nil with nothing usable yet.
-    var smoothed: LocationFix? { Self.average(fixes) }
-
-    /// The cleaned-up position only if it is fresh: an old one must not decide anything.
-    func smoothed(at now: Date) -> LocationFix? {
-        guard let latest = fixes.last, now.timeIntervalSince(latest.time) <= Self.maxStaleSeconds else { return nil }
-        return Self.average(fixes)
-    }
-
-    /// Inverse-variance weighted average; the accuracy reported is the weighted average accuracy (conservative).
-    private static func average(_ fixes: [LocationFix]) -> LocationFix? {
-        guard let last = fixes.last else { return nil }
-        let weights = fixes.map { 1 / max($0.accuracy * $0.accuracy, 1) }
-        let total = weights.reduce(0, +)
-        let lat = zip(fixes, weights).reduce(0) { $0 + $1.0.point.lat * $1.1 } / total
-        let lng = zip(fixes, weights).reduce(0) { $0 + $1.0.point.lng * $1.1 } / total
-        let accuracy = zip(fixes, weights).reduce(0) { $0 + $1.0.accuracy * $1.1 } / total
-        return LocationFix(point: GeoPoint(lat: lat, lng: lng), accuracy: accuracy, time: last.time)
-    }
-}
-
-/// Inside or outside the session's zone, with slack so the edge doesn't flicker:
-/// - leaving takes being outside by more than the GPS accuracy (at least 15 m) for 15 s, and never starts while
-///   the phone is sitting still (that is GPS drift, not walking);
-/// - coming back takes being inside (or within a little slack of the edge) for 5 s.
-struct ZonePresence: Equatable, Sendable {
-    enum State: Equatable, Sendable { case inside, outside }
-
-    static let leaveDwellSeconds = 15.0
-    static let enterDwellSeconds = 5.0
-    static let minLeaveMarginMeters = 15.0
-    static let enterSlackMeters = 10.0
+    static let exitReadings = 3
+    static let exitSeconds = 10.0
+    static let staleSeconds = 30.0
 
     let state: State
-    /// When the change in progress started, if one is.
-    let pendingSince: Date?
+    let outsideRun: Int
+    let outsideSince: Date?
+    let lastReadingAt: Date?
 
-    static let inside = ZonePresence(state: .inside, pendingSince: nil)
+    static let unknown = BuildingPresence(state: .unknown, outsideRun: 0, outsideSince: nil, lastReadingAt: nil)
 
-    /// `depth` is meters to the zone's edge: positive inside, negative outside.
-    func updated(depth: Double, accuracy: Double, isStationary: Bool, at now: Date) -> ZonePresence {
-        switch state {
-        case .inside:
-            let clearlyOutside = depth <= -max(Self.minLeaveMarginMeters, accuracy)
-            guard clearlyOutside, pendingSince != nil || !isStationary else { return .inside }
-            let since = pendingSince ?? now
-            return now.timeIntervalSince(since) >= Self.leaveDwellSeconds
-                ? ZonePresence(state: .outside, pendingSince: nil)
-                : ZonePresence(state: .inside, pendingSince: since)
-        case .outside:
-            let backInside = depth >= -min(accuracy * 0.5, Self.enterSlackMeters)
-            guard backInside else { return ZonePresence(state: .outside, pendingSince: nil) }
-            let since = pendingSince ?? now
-            return now.timeIntervalSince(since) >= Self.enterDwellSeconds
-                ? .inside
-                : ZonePresence(state: .outside, pendingSince: since)
+    func updated(with fit: CircleFit, at now: Date) -> BuildingPresence {
+        let fresh = lastReadingAt.map { now.timeIntervalSince($0) <= Self.staleSeconds } ?? false
+        let known = fresh ? state : .unknown
+        switch fit {
+        case .mostlyInside:
+            return BuildingPresence(state: .inside, outsideRun: 0, outsideSince: nil, lastReadingAt: now)
+        case .straddling:
+            return BuildingPresence(state: known, outsideRun: 0, outsideSince: nil, lastReadingAt: now)
+        case .fullyOutside:
+            let run = (fresh ? outsideRun : 0) + 1
+            let since = (fresh ? outsideSince : nil) ?? now
+            let isOut = known == .outside
+                || (run >= Self.exitReadings && now.timeIntervalSince(since) >= Self.exitSeconds)
+            return BuildingPresence(state: isOut ? .outside : known, outsideRun: run, outsideSince: since,
+                                    lastReadingAt: now)
         }
+    }
+
+    /// A faked reading: ignored, and the person is treated as still in the zone.
+    func spoofed(at now: Date) -> BuildingPresence {
+        BuildingPresence(state: .inside, outsideRun: 0, outsideSince: nil, lastReadingAt: now)
+    }
+
+    func state(at now: Date) -> State {
+        guard let lastReadingAt, now.timeIntervalSince(lastReadingAt) <= Self.staleSeconds else { return .unknown }
+        return state
+    }
+
+    /// For the status line only: not known yet but the latest reading was wholly outside reads as outside. Leaving a
+    /// session still waits for the full exit rule.
+    func displayState(at now: Date) -> State {
+        let current = state(at: now)
+        return current == .unknown && outsideRun > 0 ? .outside : current
+    }
+}
+
+/// How close a beacon is, as iOS ranges it.
+enum BeaconProximity: Equatable, Sendable { case immediate, near, far, unknown }
+
+/// Which study area you're in, from beacon ranging.
+enum BeaconRules {
+    /// A `.far` beacon still counts when iOS puts it closer than this.
+    static let farMaxAccuracyMeters = 8.0
+    /// You've left a study area after this long with no close reading of its beacon.
+    static let lostAfterSeconds = 15.0
+
+    static func isClose(_ proximity: BeaconProximity, accuracy: Double) -> Bool {
+        switch proximity {
+        case .immediate, .near: true
+        case .far: accuracy >= 0 && accuracy < farMaxAccuracyMeters
+        case .unknown: false
+        }
+    }
+}
+
+/// A study area, by zone and area id.
+struct AreaKey: Hashable, Codable, Sendable {
+    let zoneID: String
+    let areaID: String
+}
+
+/// When each study area's beacon was last close.
+struct AreaPresence: Equatable, Sendable {
+    let lastClose: [AreaKey: Date]
+
+    init(lastClose: [AreaKey: Date] = [:]) {
+        self.lastClose = lastClose
+    }
+
+    func sighted(_ key: AreaKey, proximity: BeaconProximity, accuracy: Double, at now: Date) -> AreaPresence {
+        guard BeaconRules.isClose(proximity, accuracy: accuracy) else { return self }
+        return AreaPresence(lastClose: lastClose.merging([key: now]) { max($0, $1) })
+    }
+
+    /// The study area in this zone you're in now (the most recently close one), if any.
+    func current(in zoneID: String, at now: Date) -> String? {
+        lastClose
+            .filter { $0.key.zoneID == zoneID && now.timeIntervalSince($0.value) <= BeaconRules.lostAfterSeconds }
+            .max { $0.value < $1.value }?
+            .key.areaID
+    }
+}
+
+/// Whether a zone locks the phone right now.
+enum ZoneLock: Equatable, Sendable {
+    /// In the zone; `areaID` is the study area, or nil for a whole-building zone.
+    case locked(areaID: String?)
+    case free
+    /// Not enough to go on: keep whatever was true.
+    case undecided
+}
+
+/// Where you are, for the screens.
+enum PlaceStatus: Equatable, Sendable {
+    case locating
+    case inStudyArea(Zone, StudyArea)
+    /// In a building whose study areas you aren't in (the lobby, the café).
+    case inBuilding(Zone)
+    /// In a zone that is a whole building.
+    case inZone(Zone)
+    case outside
+}
+
+/// How building and beacons combine.
+enum ZoneRules {
+    /// - Whole-building zone: inside locks, outside frees, unknown can't say.
+    /// - Zone with study areas: a close study-area beacon locks, unless GPS is sure you're outside the building
+    ///   (a beacon carried off, or broadcast from somewhere else). Indoors GPS is often too rough to prove you're
+    ///   inside, so "not outside" is enough. No close beacon: free, like the lobby or café.
+    static func lock(zone: Zone, building: BuildingPresence.State, areaID: String?) -> ZoneLock {
+        if zone.usesWholeBuilding {
+            switch building {
+            case .inside: return .locked(areaID: nil)
+            case .outside: return .free
+            case .unknown: return .undecided
+            }
+        }
+        if building == .outside { return .free }
+        if let area = zone.area(areaID) { return .locked(areaID: area.id) }
+        return .free
+    }
+
+    static func place(zones: [Zone], buildings: [String: BuildingPresence.State],
+                      areaIn: (String) -> String?) -> PlaceStatus {
+        for zone in zones {
+            let building = buildings[zone.id] ?? .unknown
+            if building != .outside, let area = zone.area(areaIn(zone.id)) { return .inStudyArea(zone, area) }
+        }
+        if let zone = zones.first(where: { buildings[$0.id] == .inside }) {
+            return zone.usesWholeBuilding ? .inZone(zone) : .inBuilding(zone)
+        }
+        return zones.contains { buildings[$0.id] == .outside } ? .outside : .locating
     }
 }

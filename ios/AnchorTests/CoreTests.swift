@@ -7,12 +7,12 @@ import Testing
 private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 private let usc = GeoPoint(lat: 34.0224, lng: -118.2851)
 
-private func config(minutes: Int = 25, radius: Double = 25) -> SessionConfig {
-    SessionConfig(studyMinutes: minutes, radiusMeters: radius, grayscale: false)
+private func config(minutes: Int = 25) -> SessionConfig {
+    SessionConfig(studyMinutes: minutes, grayscale: false)
 }
 
 private func fresh(minutes: Int = 25) -> Session {
-    Session.start(config: config(minutes: minutes), anchor: usc, anchorAccuracy: 10, at: t0)
+    Session.start(config: config(minutes: minutes), zone: Zone.circle(center: usc, radius: 25), at: t0)
 }
 
 /// A point `meters` due north of `p`.
@@ -28,36 +28,6 @@ struct GeofenceTests {
     func distance() {
         let d = Geo.distanceMeters(usc, north(of: usc, meters: 100))
         #expect(abs(d - 100) < 0.5)
-    }
-
-    @Test("unlock distance is the chosen radius plus the worse accuracy, capped at 50 m")
-    func unlockDistance() {
-        #expect(AnchorRules.unlockDistance(radius: 25, anchorAccuracy: 10, fixAccuracy: 20) == 45)
-        #expect(AnchorRules.unlockDistance(radius: 25, anchorAccuracy: 400, fixAccuracy: 5) == 75)
-        #expect(AnchorRules.unlockDistance(radius: 100, anchorAccuracy: -1, fixAccuracy: -1) == 100)
-    }
-
-    @Test("the lock radius is 25 m at least, 200 m at most, in 5 m steps")
-    func radiusClamp() {
-        #expect(AnchorRules.defaultRadiusMeters == 25)
-        #expect(AnchorRules.clampedRadius(10) == 25)
-        #expect(AnchorRules.clampedRadius(37) == 35)
-        #expect(AnchorRules.clampedRadius(38) == 40)
-        #expect(AnchorRules.clampedRadius(900) == 200)
-    }
-
-    @Test("inside the unlock distance you are at the anchor; past it you are away")
-    func zone() {
-        #expect(AnchorRules.isAway(distance: 69.9, unlockDistance: 70) == false)
-        #expect(AnchorRules.isAway(distance: 70.1, unlockDistance: 70) == true)
-    }
-
-    @Test("an anchor fix must be fresh and reasonably accurate")
-    func anchorFix() {
-        #expect(AnchorRules.isUsableAnchor(accuracy: 30, age: 5))
-        #expect(!AnchorRules.isUsableAnchor(accuracy: 30, age: 31))
-        #expect(!AnchorRules.isUsableAnchor(accuracy: 150, age: 1))
-        #expect(!AnchorRules.isUsableAnchor(accuracy: -1, age: 1))
     }
 }
 
@@ -352,7 +322,7 @@ struct VibrationVolumeTests {
         let old = #"{"studyMinutes":45,"radiusMeters":25,"grayscale":false}"#.data(using: .utf8)!
         let config = try JSONDecoder().decode(SessionConfig.self, from: old)
         #expect(!config.isLibrary)
-        #expect(SessionConfig(studyMinutes: 45, radiusMeters: 25, grayscale: false, library: true).isLibrary)
+        #expect(SessionConfig(studyMinutes: 45, grayscale: false, library: true).isLibrary)
     }
 }
 
@@ -360,16 +330,11 @@ struct VibrationVolumeTests {
 
 @Suite("Permission gate")
 struct PermissionGateTests {
-    @Test("location and Motion & Fitness are both required; notifications are not")
+    @Test("location and Precise Location are required; Motion & Fitness and notifications are not")
     func required() {
-        #expect(PermissionGate.isReady(location: true, motion: true, motionSupported: true))
-        #expect(!PermissionGate.isReady(location: true, motion: false, motionSupported: true))
-        #expect(!PermissionGate.isReady(location: false, motion: true, motionSupported: true))
-    }
-
-    @Test("a phone without a pedometer is not locked out")
-    func unsupported() {
-        #expect(PermissionGate.isReady(location: true, motion: false, motionSupported: false))
+        #expect(PermissionGate.isReady(location: true, precise: true))
+        #expect(!PermissionGate.isReady(location: true, precise: false))
+        #expect(!PermissionGate.isReady(location: false, precise: true))
     }
 }
 
@@ -395,7 +360,7 @@ struct GlanceGraceTests {
         #expect(PickupRule.steppedGrace(60, by: 5) == 60)
         let old = #"{"studyMinutes":45,"radiusMeters":25,"grayscale":false}"#.data(using: .utf8)!
         #expect(try JSONDecoder().decode(SessionConfig.self, from: old).graceSeconds == 10)
-        #expect(SessionConfig(studyMinutes: 45, radiusMeters: 25, grayscale: false, grace: 30).graceSeconds == 30)
+        #expect(SessionConfig(studyMinutes: 45, grayscale: false, grace: 30).graceSeconds == 30)
     }
 }
 
@@ -405,8 +370,8 @@ struct GlanceGraceTests {
 struct LiveActivityStateTests {
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
     private var session: Session {
-        Session.start(config: SessionConfig(studyMinutes: 25, radiusMeters: 25, grayscale: false),
-                      anchor: GeoPoint(lat: 34, lng: -118), anchorAccuracy: 10, at: t0)
+        Session.start(config: SessionConfig(studyMinutes: 25, grayscale: false),
+                      zone: Zone.circle(center: GeoPoint(lat: 34, lng: -118), radius: 25), at: t0)
     }
 
     @Test("in the grace period it is gray, counts the grace down, and the study clock keeps going")
@@ -445,184 +410,298 @@ private func offset(_ origin: GeoPoint, _ east: Double, _ north: Double) -> GeoP
     ZoneGeometry.point(from: origin, east: east, north: north)
 }
 
-@Suite("Zones")
-struct ZoneTests {
-    private let origin = GeoPoint(lat: 34.0218, lng: -118.2830)
-    private var square: [GeoPoint] { [(-50, -50), (50, -50), (50, 50), (-50, 50)].map { offset(origin, $0.0, $0.1) } }
-    /// An L: the top-right corner is cut out.
-    private var ell: [GeoPoint] { [(0, 0), (100, 0), (100, 40), (40, 40), (40, 100), (0, 100)].map { offset(origin, $0.0, $0.1) } }
+private let campus = GeoPoint(lat: 34.0218, lng: -118.2830)
+/// 100 m square centered on `campus`.
+private let square: [GeoPoint] = [(-50, -50), (50, -50), (50, 50), (-50, 50)].map { offset(campus, $0.0, $0.1) }
+private let beaconUUID = UUID(uuidString: "D0236BD0-F73D-463D-930C-7803C1B2E8A3")!
+private let room = StudyArea(id: "room-2", name: "Study Room 2", floor: 1,
+                             beacon: BeaconID(uuid: beaconUUID, major: 1, minor: 2))
+private let library = Zone(id: "lib", name: "Library", polygon: square, studyAreas: [room])
+private let hall = Zone(id: "hall", name: "Hall", polygon: square)
 
-    @Test("a point is inside a square zone, or not")
-    func insideSquare() {
-        #expect(ZoneGeometry.contains(offset(origin, 0, 0), in: square))
-        #expect(ZoneGeometry.contains(offset(origin, 49, 49), in: square))
-        #expect(!ZoneGeometry.contains(offset(origin, 60, 0), in: square))
-        #expect(!ZoneGeometry.contains(offset(origin, 0, -51), in: square))
+@Suite("Zone outlines")
+struct ZoneOutlineTests {
+    /// An L: the top-right corner is cut out.
+    private let ell = [(0, 0), (100, 0), (100, 40), (40, 40), (40, 100), (0, 100)].map { offset(campus, Double($0.0), Double($0.1)) }
+
+    @Test("a point is inside or outside the outline, right up to the edge")
+    func pointInPolygon() {
+        #expect(ZoneGeometry.contains(campus, in: square))
+        #expect(ZoneGeometry.contains(offset(campus, 49.5, 0), in: square))
+        #expect(!ZoneGeometry.contains(offset(campus, 50.5, 0), in: square))
+        #expect(ZoneGeometry.contains(offset(campus, 0, -49.5), in: square))
+        #expect(!ZoneGeometry.contains(offset(campus, 0, -50.5), in: square))
+        #expect(!ZoneGeometry.contains(offset(campus, 60, 60), in: square))
     }
 
     @Test("concave outlines work: the notch of an L is outside")
     func concave() {
-        #expect(ZoneGeometry.contains(offset(origin, 20, 80), in: ell))
-        #expect(ZoneGeometry.contains(offset(origin, 70, 20), in: ell))
-        #expect(!ZoneGeometry.contains(offset(origin, 70, 70), in: ell))
+        #expect(ZoneGeometry.contains(offset(campus, 20, 80), in: ell))
+        #expect(ZoneGeometry.contains(offset(campus, 70, 20), in: ell))
+        #expect(!ZoneGeometry.contains(offset(campus, 70, 70), in: ell))
     }
 
     @Test("depth is meters to the nearest edge: positive inside, negative outside")
     func depth() {
-        #expect(abs(ZoneGeometry.depth(of: offset(origin, 0, 0), in: square) - 50) < 0.5)
-        #expect(abs(ZoneGeometry.depth(of: offset(origin, 45, 0), in: square) - 5) < 0.5)
-        #expect(abs(ZoneGeometry.depth(of: offset(origin, 60, 0), in: square) + 10) < 0.5)
-        #expect(abs(ZoneGeometry.depth(of: offset(origin, 70, 70), in: ell) + 30) < 0.5)
+        #expect(abs(ZoneGeometry.depth(of: campus, in: square) - 50) < 0.5)
+        #expect(abs(ZoneGeometry.depth(of: offset(campus, 45, 0), in: square) - 5) < 0.5)
+        #expect(abs(ZoneGeometry.depth(of: offset(campus, 60, 0), in: square) + 10) < 0.5)
+        #expect(abs(ZoneGeometry.depth(of: offset(campus, 70, 70), in: ell) + 30) < 0.5)
     }
 
-    @Test("a dropped anchor is a circle zone of the chosen radius")
-    func circle() {
-        let zone = Zone.circle(center: origin, radius: 25)
-        #expect(abs(zone.depth(of: origin) - 25) < 0.5)
-        #expect(abs(zone.depth(of: offset(origin, 30, 0)) + 5) < 0.5)
-    }
-
-    @Test("the wake circle iOS watches covers the whole zone, and is at least 100 m")
+    @Test("the wake circle is the smallest circle around the outline plus 30 m, never under 100 m")
     func wakeCircle() {
-        let zone = Zone(id: "sq", name: "Square", polygon: square)
-        #expect(zone.wakeRadiusMeters >= 100)
-        #expect(square.allSatisfy { Geo.distanceMeters(zone.center, $0) < zone.wakeRadiusMeters })
+        let circle = ZoneGeometry.enclosingCircle(square)
+        #expect(abs(circle.radius - 50 * 2.squareRoot()) < 0.5)
+        #expect(Geo.distanceMeters(circle.center, campus) < 0.5)
+        #expect(abs(hall.wakeRadiusMeters - (50 * 2.squareRoot() + 30)) < 0.5)
+        let small = [(-10, -10), (10, -10), (10, 10)].map { offset(campus, Double($0.0), Double($0.1)) }
+        #expect(Zone(id: "s", name: "S", polygon: small).wakeRadiusMeters == Zone.minWakeRadiusMeters)
+        #expect(square.allSatisfy { Geo.distanceMeters(hall.center, $0) <= hall.wakeRadiusMeters })
     }
 
-    @Test("Leavey Library ships in zones.json, and its outline holds the building")
+    @Test("Leavey Library ships in Zones.json with its real outline and study areas")
     func leavey() throws {
-        let url = try #require(Bundle.main.url(forResource: "zones", withExtension: "json"))
-        let zones = try ZoneCatalog.decode(Data(contentsOf: url))
+        let zones = try BundledZoneStore().zones()
         let leavey = try #require(zones.first { $0.id == "usc-leavey-library" })
         #expect(leavey.polygon.count >= 10)
         #expect(leavey.contains(GeoPoint(lat: 34.02175, lng: -118.28290)))
         #expect(!leavey.contains(GeoPoint(lat: 34.02300, lng: -118.28290)))
+        #expect(!leavey.studyAreas.isEmpty)
     }
 
-    @Test("zones.json with no zones or a broken outline is refused")
+    @Test("a zones file with no zones, a broken outline, or a beacon used twice is refused")
     func badCatalog() {
-        #expect(throws: ZoneCatalog.Problem.self) { try ZoneCatalog.decode(Data(#"{"version":1,"zones":[{"id":"x","name":"X","polygon":[[34,-118],[34.1,-118]]}]}"#.utf8)) }
-    }
-}
-
-// MARK: - Presence
-
-@Suite("Presence")
-struct PresenceTests {
-    private let origin = GeoPoint(lat: 34.0218, lng: -118.2830)
-    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-    private func fix(_ east: Double, _ north: Double, acc: Double, at seconds: Double) -> LocationFix {
-        LocationFix(point: offset(origin, east, north), accuracy: acc, time: t0.addingTimeInterval(seconds))
-    }
-    private func east(of p: GeoPoint) -> Double { (p.lng - origin.lng) * .pi / 180 * Geo.earthRadiusMeters * cos(origin.lat * .pi / 180) }
-
-    @Test("fixes worse than 65 m are thrown away")
-    func dropsBad() {
-        #expect(PresenceFilter().adding(fix(0, 0, acc: 80, at: 0)).smoothed == nil)
-        #expect(PresenceFilter().adding(fix(0, 0, acc: -1, at: 0)).smoothed == nil)
-    }
-
-    @Test("recent fixes are averaged, the sharper ones counting more")
-    func averages() throws {
-        let even = PresenceFilter().adding(fix(0, 0, acc: 10, at: 0)).adding(fix(10, 0, acc: 10, at: 1))
-        #expect(abs(east(of: try #require(even.smoothed).point) - 5) < 0.2)
-        let weighted = PresenceFilter().adding(fix(0, 0, acc: 5, at: 0)).adding(fix(20, 0, acc: 20, at: 1))
-        #expect(abs(east(of: try #require(weighted.smoothed).point) - 1.18) < 0.2)
-    }
-
-    @Test("fixes older than 30 s fall out of the average")
-    func window() throws {
-        let f = PresenceFilter().adding(fix(0, 0, acc: 10, at: 0)).adding(fix(20, 0, acc: 10, at: 31))
-        #expect(abs(east(of: try #require(f.smoothed).point) - 20) < 0.2)
-    }
-
-    @Test("a sudden jump no one could walk is rejected as a GPS blunder")
-    func blunder() throws {
-        let f = PresenceFilter()
-            .adding(fix(0, 0, acc: 10, at: 0)).adding(fix(0, 0, acc: 10, at: 1)).adding(fix(0, 0, acc: 10, at: 2))
-            .adding(fix(200, 0, acc: 15, at: 3))
-        #expect(abs(east(of: try #require(f.smoothed).point)) < 0.5)
-    }
-
-    @Test("leaving needs to be clearly outside, past the GPS accuracy, for 15 s")
-    func leaves() {
-        let a = ZonePresence.inside.updated(depth: -20, accuracy: 10, isStationary: false, at: t0)
-        #expect(a.state == .inside)
-        #expect(a.updated(depth: -20, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(16)).state == .outside)
-    }
-
-    @Test("near the edge, inside the GPS slack, you stay in")
-    func edgeSlack() {
-        var p = ZonePresence.inside
-        for s in stride(from: 0.0, through: 60, by: 1) {
-            p = p.updated(depth: -10, accuracy: 25, isStationary: false, at: t0.addingTimeInterval(s))
+        #expect(throws: ZoneCatalog.Problem.self) {
+            try ZoneCatalog.decode(Data(#"{"version":1,"zones":[{"id":"x","name":"X","polygon":[[34,-118],[34.1,-118]]}]}"#.utf8))
         }
-        #expect(p.state == .inside)
-    }
-
-    @Test("sitting still, GPS drift can never take you out")
-    func stationaryDrift() {
-        var p = ZonePresence.inside
-        for s in stride(from: 0.0, through: 120, by: 1) {
-            p = p.updated(depth: -30, accuracy: 20, isStationary: true, at: t0.addingTimeInterval(s))
-        }
-        #expect(p.state == .inside)
-    }
-
-    @Test("a brief dip outside starts the 15 s over")
-    func briefDip() {
-        let p = ZonePresence.inside
-            .updated(depth: -20, accuracy: 10, isStationary: false, at: t0)
-            .updated(depth: 3, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(5))
-            .updated(depth: -20, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(10))
-            .updated(depth: -20, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(20))
-        #expect(p.state == .inside)
-    }
-
-    @Test("walking back in counts after 5 s inside")
-    func returns() {
-        let out = ZonePresence(state: .outside, pendingSince: nil)
-        let a = out.updated(depth: 5, accuracy: 10, isStationary: false, at: t0)
-        #expect(a.state == .outside)
-        #expect(a.updated(depth: 5, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(6)).state == .inside)
-    }
-}
-
-// MARK: - Zone review fixes
-
-@Suite("Zone review fixes")
-struct ZoneReviewTests {
-    private let origin = GeoPoint(lat: 34.0218, lng: -118.2830)
-    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-    private func fix(_ east: Double, acc: Double = 10, at seconds: Double) -> LocationFix {
-        LocationFix(point: offset(origin, east, 0), accuracy: acc, time: t0.addingTimeInterval(seconds))
-    }
-
-    @Test("a reading older than 15 s decides nothing")
-    func stale() {
-        let f = PresenceFilter().adding(fix(0, at: 0))
-        #expect(f.smoothed(at: t0.addingTimeInterval(10)) != nil)
-        #expect(f.smoothed(at: t0.addingTimeInterval(16)) == nil)
-    }
-
-    @Test("a reading that arrives out of order is ignored, not allowed to wipe the window")
-    func outOfOrder() {
-        let f = PresenceFilter().adding(fix(0, at: 10)).adding(fix(0, at: 11)).adding(fix(0, at: 5))
-        #expect(f.fixes.count == 2)
-    }
-
-    @Test("walking steadily is never mistaken for a GPS jump")
-    func walkingAccepted() {
-        var f = PresenceFilter()
-        for s in 0..<40 { f = f.adding(fix(Double(s) * 1.5, acc: 5, at: Double(s))) }
-        #expect(f.fixes.last?.time == t0.addingTimeInterval(39))
-        #expect(f.fixes.count >= 30)
-    }
-
-    @Test("zones with impossible coordinates are refused")
-    func badCoordinates() {
         #expect(throws: ZoneCatalog.Problem.self) {
             try ZoneCatalog.decode(Data(#"{"version":1,"zones":[{"id":"x","name":"X","polygon":[[134,-118],[34.1,-118],[34.1,-118.1]]}]}"#.utf8))
         }
+        let beacon = #"{"uuid":"D0236BD0-F73D-463D-930C-7803C1B2E8A3","major":1,"minor":1}"#
+        let twice = #"{"version":1,"zones":[{"id":"x","name":"X","polygon":[[34,-118],[34.1,-118],[34.1,-118.1]],"studyAreas":[{"id":"a","name":"A","beacon":"# + beacon + #"},{"id":"b","name":"B","beacon":"# + beacon + #"}]}]}"#
+        #expect(throws: ZoneCatalog.Problem.duplicateBeacon("b")) { try ZoneCatalog.decode(Data(twice.utf8)) }
+    }
+}
+
+// MARK: - Accuracy circles and the exit rule
+
+@Suite("Inside or outside")
+struct InsideOutsideTests {
+    @Test("a reading counts as inside when its accuracy circle is mostly inside")
+    func mostlyInside() {
+        #expect(ZoneGeometry.fit(center: campus, radius: 20, in: square) == .mostlyInside)
+        // 8 m in from the edge with a 10 m circle: only a sliver pokes out.
+        #expect(ZoneGeometry.fit(center: offset(campus, 42, 0), radius: 10, in: square) == .mostlyInside)
+        // Right on the edge: half in, half out, so neither.
+        #expect(ZoneGeometry.fit(center: offset(campus, 50, 0), radius: 10, in: square) == .straddling)
+        // 3 m out with a 10 m circle: mostly out but not wholly.
+        #expect(ZoneGeometry.fit(center: offset(campus, 53, 0), radius: 10, in: square) == .straddling)
+    }
+
+    @Test("a reading counts as outside only when its whole circle is outside")
+    func fullyOutside() {
+        #expect(ZoneGeometry.fit(center: offset(campus, 61, 0), radius: 10, in: square) == .fullyOutside)
+        #expect(ZoneGeometry.fit(center: offset(campus, 59, 0), radius: 10, in: square) == .straddling)
+    }
+
+    @Test("leaving takes 3 outside readings in a row and 10 s, whichever is later")
+    func exitRule() {
+        let inside = BuildingPresence.unknown.updated(with: .mostlyInside, at: t0)
+        #expect(inside.state == .inside)
+        // Three readings in 2 s: not 10 s yet.
+        let quick = [1.0, 2, 3].reduce(inside) { $0.updated(with: .fullyOutside, at: t0.addingTimeInterval($1)) }
+        #expect(quick.state == .inside)
+        #expect(quick.updated(with: .fullyOutside, at: t0.addingTimeInterval(11)).state == .outside)
+        // Two readings over 20 s: not 3 readings yet.
+        let slow = inside.updated(with: .fullyOutside, at: t0.addingTimeInterval(1))
+            .updated(with: .fullyOutside, at: t0.addingTimeInterval(21))
+        #expect(slow.state == .inside)
+        #expect(slow.updated(with: .fullyOutside, at: t0.addingTimeInterval(22)).state == .outside)
+    }
+
+    @Test("the status line says outside from the first wholly-outside reading; leaving still waits")
+    func displayState() {
+        let p = BuildingPresence.unknown.updated(with: .fullyOutside, at: t0)
+        #expect(p.state(at: t0) == .unknown)
+        #expect(p.displayState(at: t0) == .outside)
+    }
+
+    @Test("a reading that straddles the edge breaks the run of outside readings")
+    func straddleResets() {
+        let p = BuildingPresence.unknown.updated(with: .mostlyInside, at: t0)
+            .updated(with: .fullyOutside, at: t0.addingTimeInterval(1))
+            .updated(with: .fullyOutside, at: t0.addingTimeInterval(6))
+            .updated(with: .straddling, at: t0.addingTimeInterval(8))
+            .updated(with: .fullyOutside, at: t0.addingTimeInterval(12))
+        #expect(p.state == .inside)
+        #expect(p.outsideRun == 1)
+    }
+
+    @Test("with no reading for 30 s it no longer claims to know, and an old run doesn't count")
+    func stale() {
+        let p = BuildingPresence.unknown.updated(with: .mostlyInside, at: t0)
+        #expect(p.state(at: t0.addingTimeInterval(29)) == .inside)
+        #expect(p.state(at: t0.addingTimeInterval(31)) == .unknown)
+        let old = p.updated(with: .fullyOutside, at: t0.addingTimeInterval(1))
+            .updated(with: .fullyOutside, at: t0.addingTimeInterval(2))
+        #expect(old.updated(with: .fullyOutside, at: t0.addingTimeInterval(100)).state == .unknown)
+    }
+}
+
+// MARK: - Cleaning up readings
+
+@Suite("Location filter")
+struct LocationFilterTests {
+    private func reading(_ east: Double, acc: Double = 5, at s: Double = 0, spoofed: Bool = false) -> LocationReading {
+        LocationReading(point: offset(campus, east, 0), accuracy: acc, time: t0.addingTimeInterval(s), isSpoofed: spoofed)
+    }
+
+    @Test("readings worse than 20 m, older than 5 s, or invalid are thrown out")
+    func badReadings() {
+        let now = t0.addingTimeInterval(1)
+        #expect(LocationFilter.verdict(for: reading(0, acc: 20, at: 1), at: now) == .use)
+        #expect(LocationFilter.verdict(for: reading(0, acc: 21, at: 1), at: now) == .tooInaccurate)
+        #expect(LocationFilter.verdict(for: reading(0, acc: -1, at: 1), at: now) == .invalid)
+        #expect(LocationFilter.verdict(for: reading(0, at: -4.9), at: now) == .tooOld)
+        #expect(LocationFilter.verdict(for: reading(0, at: -3.9), at: now) == .use)
+    }
+
+    @Test("spoofed readings are never used, however sharp")
+    func spoofedReadings() {
+        #expect(LocationFilter.verdict(for: reading(0, acc: 3, at: 0, spoofed: true), at: t0) == .spoofed)
+    }
+
+    @Test("sitting still, the estimate settles tighter than any single reading")
+    func settles() throws {
+        let f = (0..<30).reduce(LocationFilter()) { f, s in f.adding(reading(s.isMultiple(of: 2) ? 4 : -4, acc: 10, at: Double(s))) }
+        let estimate = try #require(f.estimate)
+        #expect(estimate.accuracy < 10)
+        #expect(abs(ZoneGeometry.meters(estimate.point, from: campus).x) < 2)
+    }
+
+    @Test("sharper readings pull harder")
+    func weighted() throws {
+        let f = LocationFilter().adding(reading(0, acc: 5, at: 0)).adding(reading(20, acc: 20, at: 0))
+        #expect(ZoneGeometry.meters(try #require(f.estimate).point, from: campus).x < 2)
+    }
+
+    @Test("walking, the estimate keeps up instead of trailing behind")
+    func keepsUp() throws {
+        let f = (0..<40).reduce(LocationFilter()) { f, s in f.adding(reading(Double(s) * 1.4, acc: 5, at: Double(s))) }
+        let east = ZoneGeometry.meters(try #require(f.estimate).point, from: campus).x
+        #expect(abs(east - 39 * 1.4) < 4)
+    }
+
+    @Test("a reading older than the estimate is ignored")
+    func outOfOrder() {
+        let f = LocationFilter().adding(reading(0, at: 10))
+        #expect(f.adding(reading(30, at: 5)) == f)
+    }
+}
+
+// MARK: - Beacons and how it all combines
+
+@Suite("Beacons")
+struct BeaconTests {
+    @Test("in a study area when its beacon is immediate, near, or far but closer than 8 m")
+    func thresholds() {
+        #expect(BeaconRules.isClose(.immediate, accuracy: 0.3))
+        #expect(BeaconRules.isClose(.near, accuracy: 2))
+        #expect(BeaconRules.isClose(.far, accuracy: 7.9))
+        #expect(!BeaconRules.isClose(.far, accuracy: 8))
+        #expect(!BeaconRules.isClose(.far, accuracy: -1))
+        #expect(!BeaconRules.isClose(.unknown, accuracy: 1))
+    }
+
+    @Test("you've left a study area after 15 s with no close reading")
+    func lost() {
+        let key = AreaKey(zoneID: "lib", areaID: "room-2")
+        let seen = AreaPresence().sighted(key, proximity: .near, accuracy: 2, at: t0)
+        #expect(seen.current(in: "lib", at: t0.addingTimeInterval(15)) == "room-2")
+        #expect(seen.current(in: "lib", at: t0.addingTimeInterval(15.1)) == nil)
+        let farAway = seen.sighted(key, proximity: .far, accuracy: 12, at: t0.addingTimeInterval(10))
+        #expect(farAway.current(in: "lib", at: t0.addingTimeInterval(16)) == nil)
+        #expect(seen.current(in: "other", at: t0) == nil)
+    }
+
+    @Test("study-area beacon in the building locks; the lobby and outside are free")
+    func combination() {
+        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: "room-2") == .locked(areaID: "room-2"))
+        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: nil) == .free)
+        #expect(ZoneRules.lock(zone: library, building: .outside, areaID: "room-2") == .free)
+        #expect(ZoneRules.lock(zone: library, building: .outside, areaID: nil) == .free)
+        // Indoors GPS often can't prove you're in: a close beacon is enough unless GPS is sure you're out.
+        #expect(ZoneRules.lock(zone: library, building: .unknown, areaID: "room-2") == .locked(areaID: "room-2"))
+        #expect(ZoneRules.lock(zone: library, building: .inside, areaID: "not-here") == .free)
+    }
+
+    @Test("a zone with no study areas is the whole building")
+    func wholeBuilding() {
+        #expect(ZoneRules.lock(zone: hall, building: .inside, areaID: nil) == .locked(areaID: nil))
+        #expect(ZoneRules.lock(zone: hall, building: .outside, areaID: nil) == .free)
+        #expect(ZoneRules.lock(zone: hall, building: .unknown, areaID: nil) == .undecided)
+    }
+
+    @Test("the status line: study area, building but not a study area, or outside")
+    func place() {
+        let zones = [library, hall]
+        #expect(ZoneRules.place(zones: zones, buildings: ["lib": .inside], areaIn: { _ in "room-2" }) == .inStudyArea(library, room))
+        #expect(ZoneRules.place(zones: zones, buildings: ["lib": .inside], areaIn: { _ in nil }) == .inBuilding(library))
+        #expect(ZoneRules.place(zones: zones, buildings: ["hall": .inside], areaIn: { _ in nil }) == .inZone(hall))
+        #expect(ZoneRules.place(zones: zones, buildings: ["lib": .outside, "hall": .outside], areaIn: { _ in nil }) == .outside)
+        #expect(ZoneRules.place(zones: zones, buildings: [:], areaIn: { _ in nil }) == .locating)
+    }
+
+    @Test("a spoofed reading keeps you in the zone")
+    func spoofKeepsYouIn() {
+        let out = BuildingPresence(state: .outside, outsideRun: 5, outsideSince: t0, lastReadingAt: t0)
+        let after = out.spoofed(at: t0.addingTimeInterval(1))
+        #expect(after.state == .inside)
+        #expect(ZoneRules.lock(zone: hall, building: after.state(at: t0.addingTimeInterval(1)), areaID: nil) == .locked(areaID: nil))
+    }
+}
+
+// MARK: - Saved sessions
+
+@Suite("Saved sessions")
+struct SavedSessionTests {
+    @Test("a session saved before zones (a dropped anchor with a radius) still loads, as a circle")
+    func preZones() throws {
+        let json = #"""
+        {"config":{"studyMinutes":45,"radiusMeters":30,"grayscale":false,"library":true,"grace":10},
+         "anchor":{"lat":34.0224,"lng":-118.2851},"anchorAccuracy":12,"startedAt":800000000,"lastTick":800000060,
+         "studiedSeconds":60,"phoneSeconds":0,"stintSeconds":0,"longestStintSeconds":0,"awaySeconds":0,
+         "onPhone":false,"away":false,"pickups":0}
+        """#
+        let session = try JSONDecoder().decode(Session.self, from: Data(json.utf8))
+        #expect(session.zone == nil)
+        #expect(session.config.zoneID == nil)
+        #expect(session.spoofedReadings == 0)
+        #expect(abs(session.area.depth(of: session.anchor) - 30) < 0.5)
+    }
+
+    @Test("a session saved by the first zones build (no study areas yet) still loads as a whole building")
+    func firstZonesBuild() throws {
+        let json = #"""
+        {"config":{"studyMinutes":45,"radiusMeters":25,"grayscale":false},
+         "zone":{"id":"usc-leavey-library","name":"Leavey Library","polygon":[{"lat":34.0219,"lng":-118.2829},{"lat":34.0217,"lng":-118.2824},{"lat":34.0215,"lng":-118.2826}]},
+         "anchor":{"lat":34.0217,"lng":-118.2826},"anchorAccuracy":0,"startedAt":800000000,"lastTick":800000060,
+         "studiedSeconds":60,"phoneSeconds":0,"stintSeconds":0,"longestStintSeconds":0,"awaySeconds":0,
+         "onPhone":false,"away":false,"pickups":0}
+        """#
+        let session = try JSONDecoder().decode(Session.self, from: Data(json.utf8))
+        #expect(session.zone?.usesWholeBuilding == true)
+    }
+
+    @Test("a session remembers its zone and study area, and counts spoofed readings")
+    func zoneAndArea() throws {
+        let config = SessionConfig(studyMinutes: 25, grayscale: false, zoneID: "lib", areaID: "room-2")
+        let session = Session.start(config: config, zone: library, at: t0).countingSpoof()
+        let back = try JSONDecoder().decode(Session.self, from: JSONEncoder().encode(session))
+        #expect(back.config.zoneID == "lib")
+        #expect(back.config.areaID == "room-2")
+        #expect(back.placeName == "Library · Study Room 2")
+        #expect(back.spoofedReadings == 1)
     }
 }

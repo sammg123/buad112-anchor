@@ -1,35 +1,70 @@
 import Foundation
 
-/// A no-phone zone: a flat outline on the map (floors don't count). Inside it Anchor is locked; outside every
-/// zone you're free.
+/// A beacon's identity, as an iBeacon broadcasts it.
+struct BeaconID: Codable, Hashable, Sendable {
+    let uuid: UUID
+    let major: UInt16
+    let minor: UInt16
+}
+
+/// One study area inside a zone's building. GPS can't tell rooms or floors apart, so each area is found by its
+/// Bluetooth beacon instead.
+struct StudyArea: Codable, Equatable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    /// For people reading the list; floors never change the in/out decision.
+    let floor: Int?
+    let beacon: BeaconID
+}
+
+/// A no-phone zone, Lime-style: a building's outline on the map (flat; floors don't count) and the study areas
+/// inside it. With study areas listed, only those areas lock the phone (the lobby and café stay free); with none,
+/// the whole building does.
 struct Zone: Codable, Equatable, Sendable, Identifiable {
-    /// iOS wakes Anchor on arrival using a circle around the zone; it doesn't watch circles smaller than this well.
-    static let minWakeRadiusMeters = 100.0
-    /// Extra room around the outline for the wake circle, so arrival is noticed before you're at the door.
+    /// Extra room around the outline for the circle iOS watches, so arrival is noticed before you're at the door.
     static let wakeMarginMeters = 30.0
+    /// iOS doesn't reliably notice arrivals in circles smaller than this.
+    static let minWakeRadiusMeters = 100.0
 
     let id: String
     let name: String
     let polygon: [GeoPoint]
+    let studyAreas: [StudyArea]
 
-    /// The middle of the outline (the average of its corners).
-    var center: GeoPoint {
-        let n = Double(max(polygon.count, 1))
-        return GeoPoint(lat: polygon.reduce(0) { $0 + $1.lat } / n, lng: polygon.reduce(0) { $0 + $1.lng } / n)
+    init(id: String, name: String, polygon: [GeoPoint], studyAreas: [StudyArea] = []) {
+        self.id = id
+        self.name = name
+        self.polygon = polygon
+        self.studyAreas = studyAreas
     }
 
-    /// The circle iOS watches to wake Anchor when you arrive.
-    var wakeRadiusMeters: Double {
-        let farthest = polygon.map { Geo.distanceMeters(center, $0) }.max() ?? 0
-        return max(Self.minWakeRadiusMeters, farthest + Self.wakeMarginMeters)
+    /// Zones saved inside sessions before study areas existed have no `studyAreas`; they load as whole buildings.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        polygon = try container.decode([GeoPoint].self, forKey: .polygon)
+        studyAreas = try container.decodeIfPresent([StudyArea].self, forKey: .studyAreas) ?? []
     }
+
+    var usesWholeBuilding: Bool { studyAreas.isEmpty }
+
+    func area(_ id: String?) -> StudyArea? { studyAreas.first { $0.id == id } }
+
+    /// The smallest circle around the whole outline.
+    var enclosingCircle: (center: GeoPoint, radius: Double) { ZoneGeometry.enclosingCircle(polygon) }
+
+    var center: GeoPoint { enclosingCircle.center }
+
+    /// The circle iOS watches to wake Anchor on arrival: the smallest circle around the outline, plus 30 m.
+    var wakeRadiusMeters: Double { max(Self.minWakeRadiusMeters, enclosingCircle.radius + Self.wakeMarginMeters) }
 
     func contains(_ point: GeoPoint) -> Bool { ZoneGeometry.contains(point, in: polygon) }
 
     /// Meters to the nearest edge: positive inside, negative outside.
     func depth(of point: GeoPoint) -> Double { ZoneGeometry.depth(of: point, in: polygon) }
 
-    /// "Drop anchor here": a circle of the chosen radius around where you stand.
+    /// A legacy session's spot: a circle of its radius around where it was started.
     static func circle(id: String = "dropped-anchor", name: String = "Your spot", center: GeoPoint,
                        radius: Double, segments: Int = 48) -> Zone {
         let points = (0..<segments).map { i -> GeoPoint in
@@ -40,9 +75,20 @@ struct Zone: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// How a reading's accuracy circle sits against an outline.
+enum CircleFit: Equatable, Sendable {
+    case mostlyInside
+    /// Partly in, partly out: says nothing either way.
+    case straddling
+    case fullyOutside
+}
+
 /// Flat geometry for zone-sized areas: points are projected to meters around a reference, which is exact enough
 /// for anything the size of a campus.
 enum ZoneGeometry {
+    /// A reading counts as inside when more than this share of its accuracy circle is inside the outline.
+    static let mostlyInsideShare = 0.5
+
     private static let metersPerDegree = Geo.earthRadiusMeters * .pi / 180
 
     /// `point` in meters east and north of `origin`.
@@ -87,6 +133,71 @@ enum ZoneGeometry {
         return contains(point, in: polygon) ? nearest : -nearest
     }
 
+    /// Treats a reading as a circle of its accuracy: mostly inside, wholly outside, or neither.
+    static func fit(center: GeoPoint, radius: Double, in polygon: [GeoPoint]) -> CircleFit {
+        let r = max(radius, 1)
+        let d = depth(of: center, in: polygon)
+        if d <= -r { return .fullyOutside }
+        if d >= r { return .mostlyInside }
+        return insideShare(center: center, radius: r, in: polygon) > mostlyInsideShare ? .mostlyInside : .straddling
+    }
+
+    /// The share of the circle inside the outline, from 60 points spread evenly over its area
+    /// (four rings, each with points in proportion to its area).
+    static func insideShare(center: GeoPoint, radius: Double, in polygon: [GeoPoint]) -> Double {
+        var inside = 0, total = 0
+        for ring in 1...4 {
+            let r = radius * (Double(ring) - 0.5) / 4
+            let count = 6 * ring
+            for k in 0..<count {
+                let a = (Double(k) + 0.5) / Double(count) * 2 * .pi
+                total += 1
+                if contains(point(from: center, east: r * sin(a), north: r * cos(a)), in: polygon) { inside += 1 }
+            }
+        }
+        return Double(inside) / Double(total)
+    }
+
+    /// The smallest circle holding every point (incremental Welzl; exact, and quick for outlines this size).
+    static func enclosingCircle(_ points: [GeoPoint]) -> (center: GeoPoint, radius: Double) {
+        guard let origin = points.first else { return (GeoPoint(lat: 0, lng: 0), 0) }
+        let p = points.map { meters($0, from: origin) }
+        var circle = Circle(x: p[0].x, y: p[0].y, r: 0)
+        for i in p.indices where !circle.holds(p[i]) {
+            circle = Circle(x: p[i].x, y: p[i].y, r: 0)
+            for j in 0..<i where !circle.holds(p[j]) {
+                circle = Circle.through(p[i], p[j])
+                for k in 0..<j where !circle.holds(p[k]) {
+                    circle = Circle.through(p[i], p[j], p[k])
+                }
+            }
+        }
+        return (point(from: origin, east: circle.x, north: circle.y), circle.r)
+    }
+
+    private struct Circle {
+        let x: Double, y: Double, r: Double
+
+        func holds(_ p: (x: Double, y: Double)) -> Bool { hypot(p.x - x, p.y - y) <= r + 1e-6 }
+
+        static func through(_ a: (x: Double, y: Double), _ b: (x: Double, y: Double)) -> Circle {
+            Circle(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, r: hypot(a.x - b.x, a.y - b.y) / 2)
+        }
+
+        static func through(_ a: (x: Double, y: Double), _ b: (x: Double, y: Double),
+                            _ c: (x: Double, y: Double)) -> Circle {
+            let d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y))
+            guard abs(d) > 1e-9 else {
+                // In a line: the circle on the farthest pair.
+                return [through(a, b), through(a, c), through(b, c)].max { $0.r < $1.r }!
+            }
+            let a2 = a.x * a.x + a.y * a.y, b2 = b.x * b.x + b.y * b.y, c2 = c.x * c.x + c.y * c.y
+            let ux = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d
+            let uy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d
+            return Circle(x: ux, y: uy, r: hypot(a.x - ux, a.y - uy))
+        }
+    }
+
     /// Distance from the origin to the segment a-b, in the same units.
     private static func distanceToSegment(a: (x: Double, y: Double), b: (x: Double, y: Double)) -> Double {
         let dx = b.x - a.x, dy = b.y - a.y
@@ -97,12 +208,16 @@ enum ZoneGeometry {
     }
 }
 
-/// The zones file: `{"version": 1, "zones": [{"id", "name", "polygon": [[lat, lng], ...]}]}`. Bundled for now;
-/// the same shape can come from a server later.
+/// The zones file (Zones.json):
+/// `{"version": 1, "zones": [{"id", "name", "polygon": [[lat, lng], ...],
+///   "studyAreas": [{"id", "name", "floor", "beacon": {"uuid", "major", "minor"}}]}]}`.
+/// Bundled for now; the same shape can come from a server later (see `ZoneStore`).
 enum ZoneCatalog {
     enum Problem: Error, Equatable {
         case empty
         case badOutline(String)
+        case duplicateArea(String)
+        case duplicateBeacon(String)
     }
 
     private struct File: Decodable {
@@ -114,19 +229,31 @@ enum ZoneCatalog {
         let id: String
         let name: String
         let polygon: [[Double]]
+        let studyAreas: [StudyArea]?
     }
 
     static func decode(_ data: Data) throws -> [Zone] {
         let file = try JSONDecoder().decode(File.self, from: data)
         guard !file.zones.isEmpty else { throw Problem.empty }
-        return try file.zones.map { record in
-            let points = record.polygon.compactMap { pair -> GeoPoint? in
-                guard pair.count == 2, abs(pair[0]) <= 90, abs(pair[1]) <= 180 else { return nil }
-                return GeoPoint(lat: pair[0], lng: pair[1])
-            }
-            guard points.count == record.polygon.count, points.count >= 3 else { throw Problem.badOutline(record.id) }
-            return Zone(id: record.id, name: record.name, polygon: points)
+        let zones = try file.zones.map(zone(from:))
+        var beacons = Set<BeaconID>()
+        for area in zones.flatMap(\.studyAreas) where !beacons.insert(area.beacon).inserted {
+            throw Problem.duplicateBeacon(area.id)
         }
+        return zones
+    }
+
+    private static func zone(from record: Record) throws -> Zone {
+        let points = record.polygon.compactMap { pair -> GeoPoint? in
+            guard pair.count == 2, abs(pair[0]) <= 90, abs(pair[1]) <= 180 else { return nil }
+            return GeoPoint(lat: pair[0], lng: pair[1])
+        }
+        guard points.count == record.polygon.count, points.count >= 3 else { throw Problem.badOutline(record.id) }
+        let areas = record.studyAreas ?? []
+        if let repeated = Dictionary(grouping: areas, by: \.id).first(where: { $0.value.count > 1 }) {
+            throw Problem.duplicateArea(repeated.key)
+        }
+        return Zone(id: record.id, name: record.name, polygon: points, studyAreas: areas)
     }
 }
 
@@ -136,8 +263,10 @@ protocol ZoneStore: Sendable {
 }
 
 struct BundledZoneStore: ZoneStore {
+    enum Problem: Error { case missingFile }
+
     func zones() throws -> [Zone] {
-        guard let url = Bundle.main.url(forResource: "zones", withExtension: "json") else { return [] }
+        guard let url = Bundle.main.url(forResource: "Zones", withExtension: "json") else { throw Problem.missingFile }
         return try ZoneCatalog.decode(Data(contentsOf: url))
     }
 }

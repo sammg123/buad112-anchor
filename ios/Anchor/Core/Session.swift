@@ -3,8 +3,8 @@ import Foundation
 /// What the student chose on the cover before starting.
 struct SessionConfig: Codable, Equatable, Sendable {
     let studyMinutes: Int
-    /// Stop stays locked inside this circle (25 m at least), plus GPS slack.
-    let radiusMeters: Double
+    /// Only in sessions saved before zones: the circle around the dropped anchor.
+    let radiusMeters: Double?
     /// Run the "Anchor Gray" shortcut at the start and "Anchor Color" at the end.
     let grayscale: Bool
     /// Library mode: vibration only, no voice, alarm or sound, and no volume floor. Optional so settings saved
@@ -12,14 +12,19 @@ struct SessionConfig: Codable, Equatable, Sendable {
     let library: Bool?
     /// Seconds out of Anchor after unlocking before it counts as being on your phone.
     let grace: Double?
+    /// The no-phone zone and study area the session started in (nil in sessions saved before zones).
+    let zoneID: String?
+    let areaID: String?
 
-    init(studyMinutes: Int, radiusMeters: Double, grayscale: Bool, library: Bool = false,
-         grace: Double = PickupRule.defaultGraceSeconds) {
+    init(studyMinutes: Int, grayscale: Bool, library: Bool = false, grace: Double = PickupRule.defaultGraceSeconds,
+         zoneID: String? = nil, areaID: String? = nil) {
         self.studyMinutes = studyMinutes
-        self.radiusMeters = radiusMeters
+        self.radiusMeters = nil
         self.grayscale = grayscale
         self.library = library
         self.grace = grace
+        self.zoneID = zoneID
+        self.areaID = areaID
     }
 
     var isLibrary: Bool { library ?? false }
@@ -29,9 +34,9 @@ struct SessionConfig: Codable, Equatable, Sendable {
 /// One study session. A value: every change returns a new Session.
 ///
 /// Three clocks, and only one moves at a time:
-/// - study: at the anchor and off the phone,
-/// - phone: at the anchor and on the phone (it never resets during a session),
-/// - away: past the Stop unlock distance; the phone is free there and nothing else counts.
+/// - study: in the zone and off the phone,
+/// - phone: in the zone and on the phone (it never resets during a session),
+/// - away: out of the zone; the phone is free there and nothing else counts.
 struct Session: Codable, Equatable, Sendable {
     let config: SessionConfig
     /// The no-phone zone this session is locked to. Nil only for sessions saved before zones existed; those use a
@@ -51,24 +56,29 @@ struct Session: Codable, Equatable, Sendable {
     let away: Bool
     let pickups: Int
     let finishedAt: Date?
-
-    static func start(config: SessionConfig, anchor: GeoPoint, anchorAccuracy: Double, at now: Date) -> Session {
-        start(config: config, zone: nil, anchor: anchor, anchorAccuracy: anchorAccuracy, at: now)
-    }
+    /// Faked location readings seen during the session (nil in sessions saved before it was counted).
+    let spoofed: Int?
 
     static func start(config: SessionConfig, zone: Zone, at now: Date) -> Session {
-        start(config: config, zone: zone, anchor: zone.center, anchorAccuracy: 0, at: now)
+        Session(config: config, zone: zone, anchor: zone.center, anchorAccuracy: 0, startedAt: now, lastTick: now,
+                studiedSeconds: 0, phoneSeconds: 0, stintSeconds: 0, longestStintSeconds: 0, awaySeconds: 0,
+                onPhone: false, away: false, pickups: 0, finishedAt: nil, spoofed: 0)
     }
 
-    private static func start(config: SessionConfig, zone: Zone?, anchor: GeoPoint, anchorAccuracy: Double,
-                              at now: Date) -> Session {
-        Session(config: config, zone: zone, anchor: anchor, anchorAccuracy: anchorAccuracy, startedAt: now, lastTick: now,
-                studiedSeconds: 0, phoneSeconds: 0, stintSeconds: 0, longestStintSeconds: 0, awaySeconds: 0, onPhone: false, away: false, pickups: 0,
-                finishedAt: nil)
+    /// Where Stop is locked: the zone, or for a session saved before zones, a circle around its anchor.
+    var area: Zone { zone ?? Zone.circle(center: anchor, radius: config.radiusMeters ?? Self.legacyRadiusMeters) }
+
+    /// "Leavey Library · Study Room 2", or just the zone's name.
+    var placeName: String {
+        [area.name, area.area(config.areaID)?.name].compactMap { $0 }.joined(separator: " · ")
     }
 
-    /// Where Stop is locked: the zone, or a circle around the anchor.
-    var area: Zone { zone ?? Zone.circle(center: anchor, radius: config.radiusMeters) }
+    var spoofedReadings: Int { spoofed ?? 0 }
+
+    /// One more faked reading seen.
+    func countingSpoof() -> Session { copy(spoofed: spoofedReadings + 1) }
+
+    private static let legacyRadiusMeters = 25.0
 
     var targetSeconds: Double { Double(config.studyMinutes) * 60 }
     var remainingSeconds: Double { max(0, targetSeconds - studiedSeconds) }
@@ -149,7 +159,8 @@ struct Session: Codable, Equatable, Sendable {
         onPhone: Bool? = nil,
         away: Bool? = nil,
         pickups: Int? = nil,
-        finishedAt: Date?? = nil
+        finishedAt: Date?? = nil,
+        spoofed: Int? = nil
     ) -> Session {
         Session(
             config: config, zone: zone, anchor: anchor, anchorAccuracy: anchorAccuracy, startedAt: startedAt,
@@ -162,7 +173,8 @@ struct Session: Codable, Equatable, Sendable {
             onPhone: onPhone ?? self.onPhone,
             away: away ?? self.away,
             pickups: pickups ?? self.pickups,
-            finishedAt: finishedAt ?? self.finishedAt
+            finishedAt: finishedAt ?? self.finishedAt,
+            spoofed: spoofed ?? self.spoofed
         )
     }
 }
