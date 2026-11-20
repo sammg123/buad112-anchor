@@ -86,9 +86,12 @@ extension DrawAreaUITests {
         app.buttons["Draw"].tap()
         let map = app.maps.firstMatch
         XCTAssertTrue(map.waitForExistence(timeout: 5))
-        for (dx, dy) in [(0.30, 0.38), (0.70, 0.38), (0.70, 0.58), (0.30, 0.58)] {
+        // Corners tapped in bow-tie order still make a square: Save stays on.
+        for (dx, dy) in [(0.30, 0.38), (0.70, 0.58), (0.70, 0.38), (0.30, 0.58)] {
             map.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: dy)).tap()
         }
+        XCTAssertTrue(app.staticTexts["Looks good. Keep tapping to add corners, or Save."].waitForExistence(timeout: 5))
+        shot("11-any-order")
         app.buttons["Save area"].tap()
         let alert = app.alerts["Name this area"]
         XCTAssertTrue(alert.waitForExistence(timeout: 5))

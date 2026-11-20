@@ -11,6 +11,7 @@ struct SessionStore {
     private static let arrivalsKey = "anchor.arrivals.v1"
     private static let autoStartKey = "anchor.autostart.v1"
     private static let userZonesKey = "anchor.userzones.v1"
+    private static let seededKey = "anchor.seededareas.v1"
 
     private let defaults: UserDefaults
 
@@ -38,6 +39,12 @@ struct SessionStore {
         var all = defaults.dictionary(forKey: Self.arrivalsKey) ?? [:]
         all[id] = date.timeIntervalSince1970
         defaults.set(all, forKey: Self.arrivalsKey)
+    }
+
+    /// Whether the zones file's places were added to your areas yet (once, so deleting one sticks).
+    var seededAreas: Bool {
+        get { defaults.bool(forKey: Self.seededKey) }
+        nonmutating set { defaults.set(newValue, forKey: Self.seededKey) }
     }
 
     /// Areas you drew on the map.

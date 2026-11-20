@@ -28,7 +28,8 @@ final class AnchorSessionUITests: XCTestCase {
         shrink.tap()
         let expand = app.buttons["Show the full timer"]
         XCTAssertTrue(expand.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["Pickups"].exists)
+        // The full card fades out but stays laid out (so the drag can morph it); it's just not reachable.
+        XCTAssertFalse(app.staticTexts["Pickups"].isHittable)
         shot("7-compact")
         expand.tap()
         XCTAssertTrue(app.staticTexts["Pickups"].waitForExistence(timeout: 5))

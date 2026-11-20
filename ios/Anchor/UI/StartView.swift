@@ -17,8 +17,10 @@ struct StartView: View {
     @Namespace private var mapScope
     /// The sheet dragged down to a slim bar, so the whole map shows.
     @State private var isSheetCollapsed = false
-    /// Corners of the area being drawn; nil when not drawing.
+    /// Corners of the area being drawn, in outline order; nil when not drawing.
     @State private var drawing: [GeoPoint]?
+    /// The outline before each tap, so Undo takes back your last tap wherever it went in the outline.
+    @State private var drawingHistory: [[GeoPoint]] = []
     @State private var isNamingArea = false
     /// Your area picked by holding or tapping it: the glass bar offers edit and delete.
     @State private var selectedAreaID: String?
@@ -60,8 +62,14 @@ struct StartView: View {
                     }
                     Spacer()
                     DrawingToolbar(points: points,
-                                   undo: { drawing = Array(points.dropLast()) },
-                                   clear: { drawing = [] },
+                                   undo: {
+                                       drawing = drawingHistory.last ?? []
+                                       drawingHistory = Array(drawingHistory.dropLast())
+                                   },
+                                   clear: {
+                                       drawing = []
+                                       drawingHistory = []
+                                   },
                                    cancel: { endDrawing() },
                                    save: {
                                        areaName = DrawnArea.defaultName(existing: model.userZones)
@@ -76,12 +84,11 @@ struct StartView: View {
                 VStack(spacing: 0) {
                     topBar
                     Spacer()
-                    if isSheetCollapsed {
-                        collapsedBar
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    } else {
+                    CollapsibleCard(edge: .bottom, isCollapsed: $isSheetCollapsed, cornerRadius: 34,
+                                    expandLabel: "Show options", collapseLabel: "Hide options and show the map") {
                         sheet(minutes: $model.minutes, radius: $model.radiusMeters)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } compact: {
+                        collapsedBar
                     }
                 }
                 .padding(.horizontal, 12)
@@ -97,7 +104,6 @@ struct StartView: View {
         .animation(.smooth(duration: 0.25), value: selectedAreaID)
         .animation(.smooth(duration: 0.25), value: editingPoints == nil)
         .sensoryFeedback(.selection, trigger: selectedAreaID)
-        .animation(.smooth(duration: 0.3), value: isSheetCollapsed)
         .animation(.smooth(duration: 0.25), value: drawing == nil)
         .mapScope(mapScope)
         .alert("Name this area", isPresented: $isNamingArea) {
@@ -151,7 +157,10 @@ struct StartView: View {
                 guard let coordinate = proxy.convert(tap.location, from: .local) else { return }
                 let point = GeoPoint(lat: coordinate.latitude, lng: coordinate.longitude)
                 if let points = drawing {
-                    if points.count < DrawnArea.maxPoints { drawing = points + [point] }
+                    if points.count < DrawnArea.maxPoints {
+                        drawingHistory = drawingHistory + [points]
+                        drawing = DrawnArea.inserting(point, into: points)
+                    }
                     return
                 }
                 select(at: point)
@@ -250,27 +259,9 @@ struct StartView: View {
                        zoom: zoom(in:), recenter: { recenter(force: true) })
     }
 
-    /// The grabber: drag down (or tap) to shrink the sheet to a bar and see the whole map.
-    private var handle: some View {
-        Capsule()
-            .fill(Palette.secondary.opacity(0.45))
-            .frame(width: 40, height: 5)
-            .frame(maxWidth: .infinity, minHeight: 28)
-            .contentShape(Rectangle())
-            .onTapGesture { isSheetCollapsed.toggle() }
-            .gesture(DragGesture(minimumDistance: 10).onEnded { drag in
-                if drag.translation.height > 40 { isSheetCollapsed = true }
-                if drag.translation.height < -40 { isSheetCollapsed = false }
-            })
-            .accessibilityElement()
-            .accessibilityLabel(isSheetCollapsed ? "Show options" : "Hide options and show the map")
-            .accessibilityAddTraits(.isButton)
-    }
-
     /// The sheet shrunk down: the essentials in one row.
     private var collapsedBar: some View {
-        VStack(spacing: 4) {
-            handle
+        Group {
             if model.isFindingSpot {
                 FindingSpot()
             } else {
@@ -279,12 +270,11 @@ struct StartView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 12)
-        .glassPanel(cornerRadius: 30)
     }
 
     private var collapsedActions: some View {
             HStack(spacing: 10) {
-                Button { isSheetCollapsed = false } label: {
+                Button { withAnimation(CollapsibleCard<EmptyView, EmptyView>.spring) { isSheetCollapsed = false } } label: {
                     Label("\(model.minutes) min", systemImage: "chevron.up")
                         .font(.subheadline.weight(.semibold))
                         .frame(minHeight: 44)
@@ -332,7 +322,7 @@ struct StartView: View {
             return
         }
         selectedAreaID = area.id
-        isSheetCollapsed = true
+        withAnimation(CollapsibleCard<EmptyView, EmptyView>.spring) { isSheetCollapsed = true }
     }
 
     private func moveCorner(_ index: Int, to location: CGPoint, proxy: MapProxy) {
@@ -368,6 +358,7 @@ struct StartView: View {
         selectedAreaID = nil
         isFollowing = false
         isSheetCollapsed = false
+        drawingHistory = []
         drawing = []
     }
 
@@ -389,9 +380,6 @@ struct StartView: View {
 
     private func sheet(minutes: Binding<Int>, radius: Binding<Double>) -> some View {
         VStack(spacing: 22) {
-            handle
-                .padding(.top, -14)
-                .padding(.bottom, -12)
             // Only where you can start in a zone; otherwise the status line up top already says where you are.
             if model.startable != nil {
                 PlaceCard(place: model.place)
@@ -439,9 +427,8 @@ struct StartView: View {
         }
         .foregroundStyle(Palette.ink)
         .padding(.horizontal, 20)
-        .padding(.top, 22)
+        .padding(.top, 4)
         .padding(.bottom, 20)
-        .glassPanel(cornerRadius: 38)
     }
 
     /// Without Motion & Fitness your anchor runs on GPS alone, which needs the extra margin (25 m becomes ~33 m).

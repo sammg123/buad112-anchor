@@ -1195,3 +1195,139 @@ struct TwoKeyReviewTests {
         #expect(MotionTracker.plausibleMeters(6, overSeconds: 5) == 6)
     }
 }
+
+// MARK: - Corners in any order, Leavey as your area, every area locks in a session
+
+@Suite("Drawing in any order")
+struct DrawOrderTests {
+    private func pts(_ list: [(Double, Double)]) -> [GeoPoint] { list.map { offset(campus, $0.0, $0.1) } }
+
+    @Test("tapping a square's corners out of order still makes the square, not two triangles")
+    func outOfOrder() {
+        // Left, top, bottom-right, right: in tap order that's a bow tie.
+        let taps = pts([(0, 0), (20, 30), (50, -20), (60, 10)])
+        #expect(DrawnArea.crossesItself(taps))
+        let drawn = taps.reduce([GeoPoint]()) { DrawnArea.inserting($1, into: $0) }
+        #expect(drawn.count == 4)
+        #expect(!DrawnArea.crossesItself(drawn))
+        #expect(Set(drawn.map { "\($0.lat),\($0.lng)" }) == Set(taps.map { "\($0.lat),\($0.lng)" }))
+    }
+
+    @Test("corners tapped in order stay in that order")
+    func inOrder() {
+        let taps = pts([(0, 0), (40, 0), (40, 30), (0, 30)])
+        #expect(taps.reduce([GeoPoint]()) { DrawnArea.inserting($1, into: $0) } == taps)
+    }
+
+    @Test("a tangled outline untangles into one that doesn't cross, with the same corners")
+    func untangle() {
+        let bowTie = pts([(0, 0), (40, 40), (40, 0), (0, 40)])
+        let fixed = DrawnArea.untangled(bowTie)
+        #expect(!DrawnArea.crossesItself(fixed))
+        #expect(fixed.count == 4)
+        #expect(DrawnArea.problem(with: fixed) == nil)
+    }
+}
+
+@Suite("Library as your area")
+struct SeedTests {
+    private let leavey = Zone(id: "usc-leavey-library", name: "Leavey Library", polygon: square, studyAreas: [room])
+
+    @Test("zones from the file become your areas once, editable like any other")
+    func seeds() {
+        let seeded = DrawnArea.seeded(from: [leavey], into: [])
+        #expect(seeded.count == 1)
+        #expect(seeded[0].isUserArea)
+        #expect(seeded[0].name == "Leavey Library")
+        #expect(seeded[0].usesWholeBuilding)
+        // Not twice.
+        #expect(DrawnArea.seeded(from: [leavey], into: seeded) == seeded)
+    }
+}
+
+@Suite("Every area locks in a session")
+struct UnionLockTests {
+    @Test("in a session, inside any area means locked; free only when your own place is free and no area holds you")
+    func union() {
+        #expect(ZoneRules.sessionAway(own: .free, others: [.free, .undecided]) == true)
+        #expect(ZoneRules.sessionAway(own: .free, others: [.locked(areaID: nil)]) == false)
+        #expect(ZoneRules.sessionAway(own: .locked(areaID: nil), others: [.free]) == false)
+        #expect(ZoneRules.sessionAway(own: .undecided, others: [.free]) == nil)
+    }
+}
+
+// MARK: - Lock and unlock
+
+@Suite("Lock and unlock")
+struct LockTrackerTests {
+    private func at(_ s: Double) -> Date { t0.addingTimeInterval(s) }
+
+    /// Side button: the screen goes dark, the lock completes, then the lock state changes.
+    private func lock(_ tracker: LockTracker, at s: Double) -> LockTracker {
+        tracker.screen(blank: true, at: at(s))
+            .lockCompleted(at: at(s + 0.1))
+            .lockStateChanged(at: at(s + 0.2), reportsLocked: nil, screenBlank: true)
+    }
+
+    /// Face ID and swipe up: the screen lights up, then the lock state changes with no lock before it.
+    private func unlock(_ tracker: LockTracker, at s: Double) -> LockTracker {
+        tracker.screen(blank: false, at: at(s))
+            .lockStateChanged(at: at(s + 1), reportsLocked: nil, screenBlank: false)
+    }
+
+    @Test("a quick lock and unlock counts the unlock right away (it used to wait 15 s)")
+    func quick() {
+        let locked = lock(LockTracker(isUnlocked: true), at: 0)
+        #expect(!locked.isUnlocked)
+        #expect(unlock(locked, at: 3).isUnlocked)
+    }
+
+    @Test("locking and unlocking over and over counts every unlock")
+    func repeated() {
+        var tracker = LockTracker(isUnlocked: true)
+        for cycle in 0..<5 {
+            let start = Double(cycle) * 4
+            tracker = lock(tracker, at: start)
+            #expect(!tracker.isUnlocked)
+            tracker = unlock(tracker, at: start + 2)
+            #expect(tracker.isUnlocked)
+        }
+    }
+
+    @Test("the lock's own lock-state notice is a lock, even if the screen reads as on")
+    func lockNotice() {
+        let tracker = LockTracker(isUnlocked: true)
+            .lockCompleted(at: at(0))
+            .lockStateChanged(at: at(0.3), reportsLocked: nil, screenBlank: false)
+        #expect(!tracker.isUnlocked)
+        #expect(!LockTracker(isUnlocked: true).lockStateChanged(at: at(0), reportsLocked: true, screenBlank: false).isUnlocked)
+    }
+
+    @Test("the Lock Screen lighting up is not an unlock")
+    func glance() {
+        let glanced = lock(LockTracker(isUnlocked: true), at: 0).screen(blank: false, at: at(4))
+        #expect(!glanced.isUnlocked)
+        #expect(!glanced.tick(dataAvailable: true, at: at(10)).isUnlocked)
+    }
+
+    @Test("with no lock-state notice, data available and 15 s quiet still counts as unlocked")
+    func fallback() {
+        let lit = lock(LockTracker(isUnlocked: true), at: 0).screen(blank: false, at: at(5))
+        #expect(!lit.tick(dataAvailable: true, at: at(14)).isUnlocked)
+        #expect(lit.tick(dataAvailable: true, at: at(16)).isUnlocked)
+        #expect(!lit.tick(dataAvailable: false, at: at(30)).isUnlocked)
+    }
+
+    @Test("opening Anchor proves the phone is unlocked")
+    func opened() {
+        #expect(lock(LockTracker(isUnlocked: true), at: 0).opened().isUnlocked)
+    }
+
+    @Test("protected data: gone is a lock; back with the screen on is an unlock")
+    func protectedData() {
+        let gone = LockTracker(isUnlocked: true).protectedData(available: false, at: at(10))
+        #expect(!gone.isUnlocked)
+        #expect(gone.protectedData(available: true, at: at(20)).isUnlocked)
+        #expect(!gone.screen(blank: true, at: at(15)).protectedData(available: true, at: at(20)).isUnlocked)
+    }
+}

@@ -65,6 +65,8 @@ struct SessionView: View {
         let away = session.away
         let tint = away ? Palette.away : (session.isDroppedAnchor || session.area.isUserArea ? Palette.blue : Palette.red)
         return Map(position: $camera, interactionModes: [.pan, .zoom], scope: mapScope) {
+            // Every area locks during a session, so they're all on the map.
+            ZoneLayers(zones: model.tracker.zones.filter { $0.id != session.area.id }, userAreaTint: Palette.blue, you: nil)
             ZoneLayers(zones: [session.area], tint: tint, you: model.you)
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
@@ -106,13 +108,15 @@ private struct TimerCard: View {
     @State private var isCompact = false
 
     var body: some View {
-        Group {
-            if isCompact { compact } else { full }
+        CollapsibleCard(edge: .top, isCollapsed: $isCompact, cornerRadius: 36,
+                        expandLabel: "Show the full timer", collapseLabel: "Shrink to just the timer") {
+            full
+        } compact: {
+            compact
         }
-        .animation(.smooth(duration: 0.3), value: isCompact)
     }
 
-    /// Just the timer, with the grabber to pull the rest back down.
+    /// Just the timer.
     private var compact: some View {
         VStack(spacing: 2) {
             HStack(spacing: 10) {
@@ -125,31 +129,11 @@ private struct TimerCard: View {
                     .foregroundStyle(Palette.secondary)
             }
             .accessibilityElement(children: .combine)
-            grabber
         }
         .foregroundStyle(Palette.ink)
         .padding(.horizontal, 22)
         .padding(.top, 12)
         .frame(maxWidth: .infinity)
-        .glassPanel(cornerRadius: 30)
-        .transition(.move(edge: .top).combined(with: .opacity))
-    }
-
-    /// Drag up (or tap) to shrink to just the timer; drag down to bring everything back.
-    private var grabber: some View {
-        Capsule()
-            .fill(Palette.secondary.opacity(0.45))
-            .frame(width: 40, height: 5)
-            .frame(maxWidth: .infinity, minHeight: 26)
-            .contentShape(Rectangle())
-            .onTapGesture { isCompact.toggle() }
-            .gesture(DragGesture(minimumDistance: 10).onEnded { drag in
-                if drag.translation.height < -30 { isCompact = true }
-                if drag.translation.height > 30 { isCompact = false }
-            })
-            .accessibilityElement()
-            .accessibilityLabel(isCompact ? "Show the full timer" : "Shrink to just the timer")
-            .accessibilityAddTraits(.isButton)
     }
 
     private var full: some View {
@@ -185,14 +169,11 @@ private struct TimerCard: View {
                 StatTile(label: "On your phone", value: Format.clock(session.phoneSeconds), valueColor: Palette.red)
                 StatTile(label: "Pickups", value: "\(session.pickups)")
             }
-            grabber
-                .padding(.top, -6)
-                .padding(.bottom, -14)
         }
         .foregroundStyle(Palette.ink)
-        .padding(22)
-        .glassPanel(cornerRadius: 36)
-        .transition(.move(edge: .top).combined(with: .opacity))
+        .padding(.horizontal, 22)
+        .padding(.top, 22)
+        .padding(.bottom, 6)
     }
 
     private var statusColor: Color {
@@ -303,12 +284,14 @@ private struct ZoneCard: View {
     }
 
     private func kicker(out: Bool) -> String {
+        if !out, let other = model.lockedByOtherArea { return "IN \(other.name.uppercased())" }
         if session.isDroppedAnchor { return out ? "AWAY FROM YOUR SPOT" : "AT YOUR SPOT" }
         return out ? "OUTSIDE THE ZONE" : session.placeName.uppercased()
     }
 
     private func hint(out: Bool) -> String {
         if out { return "The timer is paused. Walk back in to keep going." }
+        if let other = model.lockedByOtherArea { return "\(other.name) is one of your areas. Leave it to unlock Stop." }
         if session.isDroppedAnchor {
             guard let readout = model.anchorReadout else { return "Waiting for GPS…" }
             if readout.meters >= readout.unlocksAt { return "You look out. Checking for a few seconds…" }

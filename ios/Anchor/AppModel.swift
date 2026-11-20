@@ -45,8 +45,6 @@ final class AppModel {
     private(set) var isPrecise = false
     /// Every zone, your cleaned-up position against each, and which study-area beacon is close.
     let tracker: ZoneTracker
-    /// Zones from the zones file (the library).
-    private let bundledZones: [Zone]
     /// Areas you drew on the map.
     private(set) var userZones: [Zone]
     /// Beacon mode (Settings, TestFlight only): this phone broadcasts a study area's beacon.
@@ -87,14 +85,12 @@ final class AppModel {
     let volumeGuard = VolumeGuard()
     /// Launched in the background (iOS relaunching a session), Anchor is not on screen until a scene says so.
     private var isAppActive = UIApplication.shared.applicationState != .background
-    private var isDeviceUnlocked = true
-    private var lastLockNotice = Date.distantPast
-    private var isScreenBlank = false
+    /// Locked or unlocked, from iOS's and SpringBoard's notices.
+    private var lockTracker = LockTracker(isUnlocked: true)
+    private var isDeviceUnlocked: Bool { lockTracker.isUnlocked }
     /// When the phone became unlocked with Anchor not on screen; it counts once the glance grace has passed.
     private var outsideAnchorSince: Date?
     private let screenWatcher = ScreenWatcher()
-    /// After a lock notice, iOS can still say "unlocked" for a moment; only believe it again after this long.
-    private static let relockQuietSeconds = 15.0
     /// A zone start (from the arrival notice) waiting until being in the zone is confirmed.
     private var pendingZoneID: String?
     /// "Drop anchor here" waiting for a usable reading.
@@ -132,11 +128,17 @@ final class AppModel {
         autoStart = store.autoStart
         hasOnboarded = store.hasOnboarded
         finished = store.loadFinished()
+        // The zones file's places (Leavey) join your areas once, so you can edit or delete them like any other;
+        // its study-room beacons are kept for when real ones exist.
         let bundled = Self.loadZones()
-        let drawn = store.loadUserZones()
-        bundledZones = bundled
+        if bundled.isEmpty { Self.log.error("no zones from the zones file") }
+        let drawn = store.seededAreas ? store.loadUserZones() : DrawnArea.seeded(from: bundled, into: store.loadUserZones())
+        if !store.seededAreas {
+            store.saveUserZones(drawn)
+            store.seededAreas = true
+        }
         userZones = drawn
-        tracker = ZoneTracker(zones: bundled + drawn)
+        tracker = ZoneTracker(zones: drawn)
         locationStatus = location.status
         isPrecise = location.isPrecise
         location.onFix = { [weak self] fix in self?.received(fix) }
@@ -147,10 +149,11 @@ final class AppModel {
         beacons.onRanged = { [weak self] in self?.tracker.ranged(at: Date()) }
         motion.onSegment = { [weak self] segment in self?.tracker.walked(segment) }
         startIdleTicker()
-        if bundledZones.isEmpty { Self.log.error("no zones from the zones file") }
         startZoneWatch()
         observeZoneStarts()
-        screenWatcher.onChange = { [weak self] blank in self?.screenChanged(blank: blank) }
+        screenWatcher.onBlank = { [weak self] blank in self?.screenChanged(blank: blank) }
+        screenWatcher.onLockComplete = { [weak self] in self?.lockCompleted() }
+        screenWatcher.onLockState = { [weak self] locked, blank in self?.lockStateChanged(reportsLocked: locked, screenBlank: blank) }
         screenWatcher.start()
         observeLockState()
         restore()
@@ -350,7 +353,9 @@ final class AppModel {
     func reshapeUserZone(_ id: String, to points: [GeoPoint]) -> String? {
         guard session?.area.id != id else { return "That area has a session running in it. End the session first." }
         guard let index = userZones.firstIndex(where: { $0.id == id }) else { return "That area is gone." }
-        switch DrawnArea.reshaped(userZones[index], to: points) {
+        // Corners dragged across each other: untangle rather than refuse.
+        let outline = DrawnArea.crossesItself(points) ? DrawnArea.untangled(points) : points
+        switch DrawnArea.reshaped(userZones[index], to: outline) {
         case .failure(let problem):
             return problem.hint
         case .success(let zone):
@@ -370,7 +375,7 @@ final class AppModel {
     private func setUserZones(_ zones: [Zone]) {
         userZones = zones
         store.saveUserZones(zones)
-        tracker.setZones(bundledZones + zones)
+        tracker.setZones(zones)
         // A deleted area's watch is dropped without an "left" event; forget it here so GPS can rest.
         nearZones.formIntersection(tracker.zones.map(\.id))
         startZoneWatch()
@@ -477,6 +482,7 @@ final class AppModel {
 
     func setAppActive(_ active: Bool) {
         isAppActive = active
+        if active { lockTracker = lockTracker.opened() }
         if active, let current = session, current.onPhone, current.stintSeconds <= Self.quickReturnSeconds {
             apply(current.lockedPhone(at: Date(), unseenSeconds: Self.quickReturnSeconds))
         }
@@ -641,13 +647,13 @@ final class AppModel {
 
     private func observeLockState() {
         // Opened by the student, the phone is unlocked. Relaunched in the background, ask iOS.
-        isDeviceUnlocked = isAppActive || UIApplication.shared.isProtectedDataAvailable
+        lockTracker = LockTracker(isUnlocked: isAppActive || UIApplication.shared.isProtectedDataAvailable)
         let center = NotificationCenter.default
         observers += [
             center.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self, !self.isScreenBlank else { return }
-                    self.isDeviceUnlocked = true
+                    guard let self else { return }
+                    self.lockTracker = self.lockTracker.protectedData(available: true, at: Date())
                     self.reconcile()
                 }
             },
@@ -661,20 +667,36 @@ final class AppModel {
     /// already caught the lock, there is nothing left to take back.
     private func deviceLocked() {
         let alreadySeen = !isDeviceUnlocked
-        isDeviceUnlocked = false
+        lockTracker = lockTracker.protectedData(available: false, at: Date())
         outsideAnchorSince = nil
-        lastLockNotice = Date()
         guard let current = session, current.onPhone else { return reconcile() }
         apply(current.lockedPhone(at: Date(), unseenSeconds: alreadySeen ? 0 : Ladder.lockLagSeconds))
     }
 
     /// Screen off is a lock as far as Anchor is concerned, right away.
     private func screenChanged(blank: Bool) {
-        isScreenBlank = blank
+        lockTracker = lockTracker.screen(blank: blank, at: Date())
         guard blank else { return }
-        isDeviceUnlocked = false
+        lockedNow()
+    }
+
+    private func lockCompleted() {
+        lockTracker = lockTracker.lockCompleted(at: Date())
+        lockedNow()
+    }
+
+    /// Every lock and unlock: an unlock starts the grace period right away, however soon after the last lock.
+    private func lockStateChanged(reportsLocked: Bool?, screenBlank: Bool) {
+        let wasUnlocked = isDeviceUnlocked
+        lockTracker = lockTracker.lockStateChanged(at: Date(), reportsLocked: reportsLocked, screenBlank: screenBlank)
+        Self.log.info("lock state: \(self.isDeviceUnlocked ? "unlocked" : "locked") (was \(wasUnlocked ? "unlocked" : "locked"), screen \(screenBlank ? "off" : "on"))")
+        if isDeviceUnlocked { return reconcile() }
+        lockedNow()
+    }
+
+    /// The phone is locked as of now: nothing from here on is phone time.
+    private func lockedNow() {
         outsideAnchorSince = nil
-        lastLockNotice = Date()
         guard let current = session, current.onPhone else { return reconcile() }
         apply(current.lockedPhone(at: Date(), unseenSeconds: 0))
     }
@@ -876,24 +898,26 @@ final class AppModel {
     /// so "unlocked" is only believed after a quiet spell. Without a passcode iOS always says unlocked: skip it.
     private func syncLockState() {
         guard hasPasscode else { return }
-        let available = UIApplication.shared.isProtectedDataAvailable
-        if isDeviceUnlocked, !available {
-            isDeviceUnlocked = false
-        } else if !isDeviceUnlocked, available, !isScreenBlank,
-                  now.timeIntervalSince(lastLockNotice) > Self.relockQuietSeconds {
-            isDeviceUnlocked = true
-        }
+        lockTracker = lockTracker.tick(dataAvailable: UIApplication.shared.isProtectedDataAvailable, at: now)
     }
 
-    /// Location decides: GPS against the zone's building, and for zones with study areas, a close study-area
-    /// beacon. Nil when there isn't enough to go on (keep what was true).
+    /// Location decides. During a session every area locks, not just the one it started in: you're away only
+    /// when your own place is free and you're in none of your areas. Nil when there isn't enough to go on.
     private func isAway() -> Bool? {
         guard let session else { return nil }
-        switch tracker.lock(for: session.area, at: now) {
-        case .locked: return false
-        case .free: return true
-        case .undecided: return nil
-        }
+        let others = tracker.zones.filter { $0.id != session.area.id }.map { tracker.lock(for: $0, at: now) }
+        return ZoneRules.sessionAway(own: tracker.lock(for: session.area, at: now), others: others)
+    }
+
+    /// During a session, another of your areas holding you in (you walked from your anchor into Leavey, say).
+    var lockedByOtherArea: Zone? {
+        guard let session, !isLocked(session.area) else { return nil }
+        return tracker.zones.first { $0.id != session.area.id && isLocked($0) }
+    }
+
+    private func isLocked(_ zone: Zone) -> Bool {
+        if case .locked = tracker.lock(for: zone, at: now) { return true }
+        return false
     }
 }
 
