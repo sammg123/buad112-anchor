@@ -65,7 +65,7 @@ struct SessionView: View {
         let away = session.away
         let tint = away ? Palette.away : (session.isDroppedAnchor || session.area.isUserArea ? Palette.blue : Palette.red)
         return Map(position: $camera, interactionModes: [.pan, .zoom], scope: mapScope) {
-            ZoneLayers(zones: [session.area], tint: tint, accuracy: model.tracker.accuracyCircle)
+            ZoneLayers(zones: [session.area], tint: tint, you: model.you)
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
         .mapControlVisibility(.hidden)
@@ -102,8 +102,57 @@ struct SessionView: View {
 private struct TimerCard: View {
     @Environment(AppModel.self) private var model
     let session: Session
+    /// Swiped up to just the timer, so the map shows full screen.
+    @State private var isCompact = false
 
     var body: some View {
+        Group {
+            if isCompact { compact } else { full }
+        }
+        .animation(.smooth(duration: 0.3), value: isCompact)
+    }
+
+    /// Just the timer, with the grabber to pull the rest back down.
+    private var compact: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 10) {
+                Circle().fill(statusColor).frame(width: 9, height: 9).accessibilityHidden(true)
+                Text(Format.clock(session.remainingSeconds))
+                    .font(.system(size: 34, weight: .bold).monospacedDigit())
+                    .contentTransition(.numericText(countsDown: true))
+                Text(session.away ? "paused" : "left")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Palette.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            grabber
+        }
+        .foregroundStyle(Palette.ink)
+        .padding(.horizontal, 22)
+        .padding(.top, 12)
+        .frame(maxWidth: .infinity)
+        .glassPanel(cornerRadius: 30)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    /// Drag up (or tap) to shrink to just the timer; drag down to bring everything back.
+    private var grabber: some View {
+        Capsule()
+            .fill(Palette.secondary.opacity(0.45))
+            .frame(width: 40, height: 5)
+            .frame(maxWidth: .infinity, minHeight: 26)
+            .contentShape(Rectangle())
+            .onTapGesture { isCompact.toggle() }
+            .gesture(DragGesture(minimumDistance: 10).onEnded { drag in
+                if drag.translation.height < -30 { isCompact = true }
+                if drag.translation.height > 30 { isCompact = false }
+            })
+            .accessibilityElement()
+            .accessibilityLabel(isCompact ? "Show the full timer" : "Shrink to just the timer")
+            .accessibilityAddTraits(.isButton)
+    }
+
+    private var full: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 status
@@ -136,10 +185,18 @@ private struct TimerCard: View {
                 StatTile(label: "On your phone", value: Format.clock(session.phoneSeconds), valueColor: Palette.red)
                 StatTile(label: "Pickups", value: "\(session.pickups)")
             }
+            grabber
+                .padding(.top, -6)
+                .padding(.bottom, -14)
         }
         .foregroundStyle(Palette.ink)
         .padding(22)
         .glassPanel(cornerRadius: 36)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    private var statusColor: Color {
+        model.isPaused ? Palette.secondary : session.away ? Palette.away : session.onPhone ? Palette.red : Palette.blue
     }
 
     private var status: some View {
@@ -255,7 +312,8 @@ private struct ZoneCard: View {
         if session.isDroppedAnchor {
             guard let readout = model.anchorReadout else { return "Waiting for GPS…" }
             if readout.meters >= readout.unlocksAt { return "You look out. Checking for a few seconds…" }
-            return "You're \(Int(readout.meters.rounded())) m from your anchor. Stop unlocks at about \(Int(readout.unlocksAt.rounded(.up))) m."
+            let fuzz = model.you.map { " (±\(Int($0.radius.rounded())) m)" } ?? ""
+            return "You're \(Int(readout.meters.rounded())) m from your anchor\(fuzz). Stop unlocks at \(Int(readout.unlocksAt.rounded())) m."
         }
         let zone = session.area
         if let area = zone.area(session.config.areaID) {

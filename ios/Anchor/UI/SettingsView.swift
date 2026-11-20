@@ -129,6 +129,8 @@ struct SettingsView: View {
                       isGood: model.locationStatus == .authorizedAlways)
             StatusRow(symbol: "scope", tint: .indigo, title: "Precise Location",
                       value: model.isPrecise ? "On" : "Off", isGood: model.isPrecise)
+            StatusRow(symbol: "figure.walk", tint: .green, title: "Motion & Fitness",
+                      value: model.motionAllowed ? "On" : "Off", isGood: model.motionAllowed)
             StatusRow(symbol: "bell.badge.fill", tint: .red, title: "Notifications",
                       value: model.notificationsAllowed ? "On" : "Off", isGood: model.notificationsAllowed)
             StatusRow(symbol: "lock.shield.fill", tint: .teal, title: "Phone passcode",

@@ -36,6 +36,19 @@ enum AnchorRules {
         return min(max(stepped, minRadiusMeters), maxRadiusMeters)
     }
 
+    /// For its first minute the anchor moves onto a sharper reading, as long as you're still near it (sitting
+    /// down, not walking off).
+    static let settleSeconds = 60.0
+    static let settleImprovementMeters = 2.0
+    static let settleMinRangeMeters = 10.0
+
+    static func shouldSettle(anchorAccuracy: Double, estimateAccuracy: Double, metersFromAnchor: Double,
+                             sessionAge: TimeInterval) -> Bool {
+        sessionAge <= settleSeconds
+            && estimateAccuracy + settleImprovementMeters < anchorAccuracy
+            && metersFromAnchor <= max(settleMinRangeMeters, anchorAccuracy)
+    }
+
     static func isUsableAnchor(accuracy: Double, age: TimeInterval) -> Bool {
         accuracy >= 0 && accuracy <= maxAnchorAccuracyMeters && age <= maxAnchorAgeSeconds
     }

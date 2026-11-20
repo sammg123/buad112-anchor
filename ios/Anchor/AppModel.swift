@@ -81,6 +81,9 @@ final class AppModel {
     private let escalator = Escalator()
     private let liveActivity = LiveActivityController()
     private let beacons = BeaconService()
+    /// The walking key for your own anchor.
+    private let motion = MotionTracker()
+    private(set) var motionAllowed = MotionTracker.isAuthorized
     let volumeGuard = VolumeGuard()
     /// Launched in the background (iOS relaunching a session), Anchor is not on screen until a scene says so.
     private var isAppActive = UIApplication.shared.applicationState != .background
@@ -106,6 +109,9 @@ final class AppModel {
     private var ticker: Timer?
     private var observers: [NSObjectProtocol] = []
     #if DEBUG
+    /// Simulator only (no step counter): GPS movement during a session stands in for walking.
+    private var fakesWalking = false
+    private var lastFakePoint: GeoPoint?
     /// Simulator only: start a zone session as soon as you're in one.
     private var autoStartsZone = false
     #endif
@@ -139,6 +145,7 @@ final class AppModel {
             self?.sighted(area, proximity: proximity, accuracy: accuracy)
         }
         beacons.onRanged = { [weak self] in self?.tracker.ranged(at: Date()) }
+        motion.onSegment = { [weak self] segment in self?.tracker.walked(segment) }
         startIdleTicker()
         if bundledZones.isEmpty { Self.log.error("no zones from the zones file") }
         startZoneWatch()
@@ -154,6 +161,7 @@ final class AppModel {
         let args = ProcessInfo.processInfo.arguments
         if args.contains("-onboarded") { hasOnboarded = true }
         autoStartsZone = args.contains("-autozone")
+        fakesWalking = args.contains("-fakeWalk")
         if args.contains("-autostart"), session == nil { dropAnchor() }
         if args.contains("-fakeBeacon") { startFakeBeacon() }
         if args.contains("-resetAreas") { setUserZones([]) }
@@ -198,6 +206,30 @@ final class AppModel {
 
     /// Roughly how much farther to walk before Stop unlocks: out past the edge by the GPS accuracy (the whole
     /// accuracy circle has to be outside).
+    /// Your dot and its fuzz for the maps.
+    var you: (center: GeoPoint, radius: Double)? {
+        tracker.you(at: now, fallback: fix?.reading)
+    }
+
+    var motionDenied: Bool { MotionTracker.isDenied }
+
+    /// Motion & Fitness: the second key that makes your own anchor's 25 m exact.
+    func requestMotion() async {
+        _ = await motion.requestPermission()
+        motionAllowed = MotionTracker.isAuthorized
+        updateMotion()
+    }
+
+    /// The walking key runs during a dropped-anchor session when Motion & Fitness is on.
+    private func updateMotion() {
+        let wanted = motionAllowed && MotionTracker.isAvailable && session?.isDroppedAnchor == true
+        if wanted { motion.start() } else { motion.stop() }
+        #if DEBUG
+        if fakesWalking, session?.isDroppedAnchor == true { tracker.usesWalkKey = true; return }
+        #endif
+        tracker.usesWalkKey = wanted
+    }
+
     /// GPS error right now (the margin used at edges), for the start screen.
     var gpsMargin: Double? {
         tracker.freshEstimate(at: now).map(tracker.margin(for:))
@@ -206,8 +238,10 @@ final class AppModel {
     /// A dropped anchor: how far you are from it and how far out Stop unlocks (your radius plus the GPS margin).
     var anchorReadout: (meters: Double, unlocksAt: Double)? {
         guard let session, session.isDroppedAnchor, let here = tracker.freshEstimate(at: now) else { return nil }
-        return (Geo.distanceMeters(session.area.center, here.point),
-                session.area.enclosingCircle.radius + tracker.margin(for: here))
+        let radius = session.area.enclosingCircle.radius
+        // With the walking key, 25 m means 25 m; on GPS alone the whole fuzz circle has to clear the line.
+        let unlocksAt = tracker.usesWalkKey ? radius : radius + tracker.margin(for: here)
+        return (Geo.distanceMeters(session.area.center, here.point), unlocksAt)
     }
 
     /// Meters to the nearest way out of a building (its edge), while you're inside one; nil otherwise.
@@ -236,6 +270,7 @@ final class AppModel {
     func refreshPermissions() async {
         locationStatus = location.status
         isPrecise = location.isPrecise
+        motionAllowed = MotionTracker.isAuthorized
         hasPasscode = LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
         notificationsAllowed = await buzzer.isAuthorized()
         if locationStatus == .authorizedWhenInUse, !Self.skipsAlwaysPrompt { location.requestAlways() }
@@ -307,6 +342,21 @@ final class AppModel {
         return nil
     }
 
+    /// Moves an area's corners; returns why it can't, if it can't (an outline that crosses, or the area a session
+    /// is running in).
+    @discardableResult
+    func reshapeUserZone(_ id: String, to points: [GeoPoint]) -> String? {
+        guard session?.area.id != id else { return "That area has a session running in it. End the session first." }
+        guard let index = userZones.firstIndex(where: { $0.id == id }) else { return "That area is gone." }
+        switch DrawnArea.reshaped(userZones[index], to: points) {
+        case .failure(let problem):
+            return problem.hint
+        case .success(let zone):
+            setUserZones(userZones.enumerated().map { $0.offset == index ? zone : $0.element })
+            return nil
+        }
+    }
+
     /// Deletes areas you drew (not one a session is running in).
     func deleteUserZones(_ ids: Set<String>) {
         let inUse = Set([session?.area.id].compactMap { $0 })
@@ -332,9 +382,11 @@ final class AppModel {
             notice = "Anchor needs Location with Precise Location on. Turn them on in Settings › Anchor › Location."
             return
         }
-        if let fix, isUsableAnchor(fix) {
+        // Only on a sharp position: an anchor dropped on a rough reading lands where you aren't.
+        if tracker.isLockedOn(at: Date()), let fix {
             beginAnchor(at: fix)
         } else {
+            dropWaitStarted = Date()
             pendingZoneID = nil
             isDroppingAnchor = true
             isFindingSpot = true
@@ -346,6 +398,20 @@ final class AppModel {
                 self?.giveDropUp(attempt: attempt)
             }
         }
+    }
+
+    /// After a while without sharp GPS, the waiting screen offers dropping on what there is.
+    static let dropAnywayAfterSeconds = 15.0
+    /// When the current wait for sharp GPS began.
+    private(set) var dropWaitStarted: Date?
+
+    /// "Drop anyway": the best position there is, with the circle widened by its error.
+    func dropAnchorAnyway() {
+        guard isDroppingAnchor, let fix, isUsableAnchor(fix) else {
+            notice = "No usable GPS yet. Step near a window or outside for a moment."
+            return
+        }
+        beginAnchor(at: fix)
     }
 
     /// No usable reading in time (deep indoors, say): stop waiting rather than start somewhere stale later.
@@ -365,14 +431,19 @@ final class AppModel {
     private func beginAnchor(at fix: CLLocation) {
         let radius = AnchorRules.clampedRadius(radiusMeters)
         if let here = tracker.freshEstimate(at: Date()) {
-            return begin(in: Zone.droppedAnchor(center: here.point, radius: radius), areaID: nil, radius: radius)
+            return begin(in: Zone.droppedAnchor(center: here.point, radius: radius), areaID: nil, radius: radius,
+                         anchorAccuracy: here.accuracy)
         }
+        // Only a rough reading: the circle starts widened by its error, and shrinks back to your radius as soon as
+        // the anchor settles onto a sharp one.
         let extra = max(0, fix.horizontalAccuracy - LocationFilter.minMarginMeters)
-        begin(in: Zone.droppedAnchor(center: fix.point, radius: radius + extra), areaID: nil, radius: radius)
+        begin(in: Zone.droppedAnchor(center: fix.point, radius: radius + extra), areaID: nil, radius: radius,
+              anchorAccuracy: fix.horizontalAccuracy)
     }
 
     func cancelFindingSpot() {
         isDroppingAnchor = false
+        dropWaitStarted = nil
         pendingZoneID = nil
         isFindingSpot = false
         updateTracking()
@@ -472,8 +543,17 @@ final class AppModel {
     private func received(_ newFix: CLLocation) {
         fix = newFix
         now = Date()
-        if isDroppingAnchor, session == nil, isUsableAnchor(newFix) { return beginAnchor(at: newFix) }
+        if isDroppingAnchor, session == nil, tracker.isLockedOn(at: now) { return beginAnchor(at: newFix) }
         let verdict = tracker.received(newFix.reading, at: now)
+        #if DEBUG
+        if fakesWalking, session != nil, let last = lastFakePoint {
+            let moved = ZoneGeometry.meters(newFix.point, from: last)
+            let meters = (moved.x * moved.x + moved.y * moved.y).squareRoot()
+            if meters > 0.3 { tracker.walked(WalkSegment(time: now, meters: meters, heading: atan2(moved.x, moved.y))) }
+        }
+        lastFakePoint = newFix.point
+        #endif
+        settleAnchor()
         if verdict == .spoofed, let current = session {
             // A faked reading: ignored, you count as still in the zone, and the session remembers it.
             tracker.spoofed(in: current.area.id, at: now)
@@ -481,6 +561,19 @@ final class AppModel {
             apply(current.countingSpoof().advanced(to: now))
         }
         zoneChanged()
+    }
+
+    /// A dropped anchor's first minute: move it onto a sharper reading while you're still sitting by it.
+    private func settleAnchor() {
+        guard let current = session, current.isDroppedAnchor, let radius = current.config.radiusMeters,
+              let here = tracker.freshEstimate(at: now),
+              AnchorRules.shouldSettle(anchorAccuracy: current.anchorAccuracy, estimateAccuracy: here.accuracy,
+                                       metersFromAnchor: Geo.distanceMeters(current.anchor, here.point),
+                                       sessionAge: now.timeIntervalSince(current.startedAt)) else { return }
+        let settled = current.reanchored(to: Zone.droppedAnchor(center: here.point, radius: radius), accuracy: here.accuracy)
+        tracker.setExtraZone(settled.area)
+        session = settled
+        store.saveRunning(settled)
     }
 
     private func sighted(_ area: AreaKey, proximity: BeaconProximity, accuracy: Double) {
@@ -586,7 +679,7 @@ final class AppModel {
     // MARK: - The loop
 
     /// Starts a session in a zone from the zones file, or (with `radius`) at a dropped anchor's circle.
-    private func begin(in zone: Zone, areaID: String?, radius: Double? = nil) {
+    private func begin(in zone: Zone, areaID: String?, radius: Double? = nil, anchorAccuracy: Double = 0) {
         pendingZoneID = nil
         isDroppingAnchor = false
         isFindingSpot = false
@@ -594,15 +687,19 @@ final class AppModel {
         store.saveFinished(nil)
         let config = SessionConfig(studyMinutes: minutes, library: library, grace: graceSeconds,
                                    radiusMeters: radius, zoneID: zone.isDroppedAnchor ? nil : zone.id, areaID: areaID)
-        let started = Session.start(config: config, zone: zone, at: Date())
+        let started = Session.start(config: config, zone: zone, anchorAccuracy: anchorAccuracy, at: Date())
         if !zone.isDroppedAnchor { store.saveArrival(atZone: zone.id, at: Date()) }
         tracker.setExtraZone(zone)
+        tracker.resetWalk()
+        dropWaitStarted = nil
         location.startSession()
         updateTracking()
         escalator.startKeepAlive()
         volumeGuard.setEnforcing(!config.isLibrary)
         startTicker()
         apply(started)
+        // After the session exists: the walking key is for dropped anchors only.
+        updateMotion()
         liveActivity.start(for: started, at: Date())
     }
 
@@ -621,6 +718,7 @@ final class AppModel {
         // A dropped anchor (or a session saved before zones) keeps its circle.
         tracker.setExtraZone(saved.area)
         location.startSession()
+        defer { updateMotion() }
         escalator.startKeepAlive()
         volumeGuard.setEnforcing(!saved.config.isLibrary)
         startTicker()
@@ -758,6 +856,7 @@ final class AppModel {
         tracker.setExtraZone(nil)
         session = nil
         updateTracking()
+        updateMotion()
         finished = last
         store.saveRunning(nil)
         store.saveFinished(last)

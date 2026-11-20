@@ -55,6 +55,18 @@ enum DrawnArea {
         return Zone(id: id, name: trimmed.isEmpty ? fallbackName : String(trimmed.prefix(40)), polygon: points)
     }
 
+    /// Your area under a point you held or tapped: the smallest one, where yours overlap. Library zones aren't
+    /// yours to edit.
+    static func area(at point: GeoPoint, in zones: [Zone]) -> Zone? {
+        zones.filter { $0.isUserArea && $0.contains(point) }.min { squareMeters($0.polygon) < squareMeters($1.polygon) }
+    }
+
+    /// The same area with its corners moved, if the new outline is still valid.
+    static func reshaped(_ zone: Zone, to points: [GeoPoint]) -> Result<Zone, Problem> {
+        if let problem = problem(with: points) { return .failure(problem) }
+        return .success(Zone(id: zone.id, name: zone.name, polygon: points))
+    }
+
     /// Letters, digits and dashes only, so iOS can watch it.
     static func newID() -> String {
         idPrefix + UUID().uuidString.prefix(8).lowercased()

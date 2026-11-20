@@ -1,13 +1,15 @@
 import MapKit
 import SwiftUI
 
-/// The zones on a map, Lime-style: each building shaded red, your position with its accuracy circle on top.
+/// The zones on a map, Lime-style: each building shaded red, and you on top as a small dot with a faint ring for
+/// how unsure GPS is (wide when it's fuzzy, nearly gone when it's sharp).
 struct ZoneLayers: MapContent {
     let zones: [Zone]
     var tint: Color = Palette.red
     /// Your own drawn areas in their own color (start screen), or nil to use `tint` for everything.
     var userAreaTint: Color?
-    let accuracy: (center: GeoPoint, radius: Double)?
+    /// Your dot and its fuzz.
+    let you: (center: GeoPoint, radius: Double)?
 
     var body: some MapContent {
         ForEach(zones) { zone in
@@ -23,12 +25,26 @@ struct ZoneLayers: MapContent {
                 }
             }
         }
-        if let accuracy {
-            MapCircle(center: accuracy.center.coordinate, radius: accuracy.radius)
-                .foregroundStyle(Palette.blue.opacity(0.12))
-                .stroke(Palette.blue.opacity(0.45), lineWidth: 1)
+        if let you {
+            MapCircle(center: you.center.coordinate, radius: you.radius)
+                .foregroundStyle(Palette.blue.opacity(0.10))
+                .stroke(Palette.blue.opacity(0.25), lineWidth: 1)
+            Annotation("", coordinate: you.center.coordinate, anchor: .center) {
+                YouDot()
+            }
         }
-        UserAnnotation()
+    }
+}
+
+/// Where you are: a small blue dot, like Maps, without iOS's own halo.
+struct YouDot: View {
+    var body: some View {
+        Circle()
+            .fill(Palette.blue)
+            .frame(width: 14, height: 14)
+            .overlay(Circle().stroke(.white, lineWidth: 3))
+            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+            .accessibilityLabel("You")
     }
 }
 

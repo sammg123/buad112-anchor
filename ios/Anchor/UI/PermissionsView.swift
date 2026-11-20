@@ -5,6 +5,7 @@ import UIKit
 struct PermissionsView: View {
     @Environment(AppModel.self) private var model
     @State private var askedNotifications = false
+    @State private var askedMotion = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -26,6 +27,9 @@ struct PermissionsView: View {
                 PermissionRow(symbol: "location.fill", tint: Palette.blue, title: "Location", tag: "REQUIRED",
                               detail: "To know when you leave your spot or a no-phone zone. Choose Always, and keep Precise Location on.",
                               done: model.hasLocation)
+                PermissionRow(symbol: "figure.walk", tint: Palette.blue, title: "Motion & Fitness", tag: "RECOMMENDED",
+                              detail: "Makes your 25 m exact: Stop unlocks only once you've really walked out, so GPS drift can't free you and shaking can't either.",
+                              done: model.motionAllowed)
                 PermissionRow(symbol: "bell.fill", tint: Palette.red, title: "Notifications", tag: "RECOMMENDED",
                               detail: "The annoying part. Without them Anchor can't buzz you while you scroll.",
                               done: model.notificationsAllowed)
@@ -56,6 +60,17 @@ struct PermissionsView: View {
             } else if !model.hasLocation {
                 Button("Allow Location") { model.requestLocation() }
                     .buttonStyle(ProminentButtonStyle())
+            } else if !model.motionAllowed && !model.motionDenied && !askedMotion {
+                Button("Allow Motion & Fitness") {
+                    Task {
+                        await model.requestMotion()
+                        askedMotion = true
+                    }
+                }
+                .buttonStyle(ProminentButtonStyle())
+                Button("Not now") { askedMotion = true }
+                    .font(.body.weight(.semibold))
+                    .frame(minHeight: 44)
             } else if !model.notificationsAllowed && !askedNotifications {
                 Button("Turn On Buzzing") {
                     Task {

@@ -20,13 +20,35 @@ struct StartView: View {
     /// Corners of the area being drawn; nil when not drawing.
     @State private var drawing: [GeoPoint]?
     @State private var isNamingArea = false
+    /// Your area picked by holding or tapping it: the glass bar offers edit and delete.
+    @State private var selectedAreaID: String?
+    /// Corners of the selected area while you drag them; nil when not editing.
+    @State private var editingPoints: [GeoPoint]?
+    @State private var draggingCorner: Int?
+    @State private var isConfirmingDelete = false
+    /// Where the current touch on the map began, for picking an area by holding it.
+    @State private var touchDown: CGPoint?
     @State private var areaName = ""
 
     var body: some View {
         @Bindable var model = model
         ZStack {
             map
-            if let points = drawing {
+            if let points = editingPoints {
+                VStack(spacing: 10) {
+                    HStack(alignment: .top) {
+                        MapScaleBar(scope: mapScope)
+                        Spacer()
+                        zoomButtons
+                    }
+                    Spacer()
+                    EditToolbar(points: points, cancel: { editingPoints = nil }, save: saveEdit)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 8)
+                .transition(.opacity)
+            } else if let points = drawing {
                 VStack(spacing: 10) {
                     DrawingHeader(points: points)
                     HStack {
@@ -64,6 +86,15 @@ struct StartView: View {
                 .padding(.bottom, 8)
             }
         }
+        .overlay {
+            if isConfirmingDelete, let area = selectedArea {
+                DeleteAreaConfirm(name: area.name, cancel: { isConfirmingDelete = false }, delete: deleteSelected)
+            }
+        }
+        .animation(.smooth(duration: 0.25), value: isConfirmingDelete)
+        .animation(.smooth(duration: 0.25), value: selectedAreaID)
+        .animation(.smooth(duration: 0.25), value: editingPoints == nil)
+        .sensoryFeedback(.selection, trigger: selectedAreaID)
         .animation(.smooth(duration: 0.3), value: isSheetCollapsed)
         .animation(.smooth(duration: 0.25), value: drawing == nil)
         .mapScope(mapScope)
@@ -102,8 +133,9 @@ struct StartView: View {
 
     private var map: some View {
         MapReader { proxy in
-            Map(position: $camera, interactionModes: [.pan, .zoom], scope: mapScope) {
-                mapContent
+            // While you drag corners the map holds still, so the drag moves the corner, not the map.
+            Map(position: $camera, interactionModes: editingPoints == nil ? [.pan, .zoom] : [], scope: mapScope) {
+                mapContent(proxy)
             }
             .mapStyle(.standard(pointsOfInterest: .excludingAll))
             .mapControlVisibility(.hidden)
@@ -112,23 +144,51 @@ struct StartView: View {
                 zoomTarget = nil
                 if camera.positionedByUser { isFollowing = false }
             }
-            // While drawing, each tap on the map adds a corner.
+            // Drawing: each tap adds a corner. Otherwise a tap picks (or lets go of) one of your areas.
             .simultaneousGesture(SpatialTapGesture(coordinateSpace: .local).onEnded { tap in
-                guard let points = drawing, points.count < DrawnArea.maxPoints,
-                      let coordinate = proxy.convert(tap.location, from: .local) else { return }
-                drawing = points + [GeoPoint(lat: coordinate.latitude, lng: coordinate.longitude)]
-            }, including: drawing == nil ? .subviews : .all)
+                guard let coordinate = proxy.convert(tap.location, from: .local) else { return }
+                let point = GeoPoint(lat: coordinate.latitude, lng: coordinate.longitude)
+                if let points = drawing {
+                    if points.count < DrawnArea.maxPoints { drawing = points + [point] }
+                    return
+                }
+                select(at: point)
+            }, including: editingPoints == nil ? .all : .subviews)
+            // Holding on one of your areas picks it too: remember where the finger went down, and pick there once
+            // the hold completes.
+            .simultaneousGesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                .onChanged { touch in if touchDown == nil { touchDown = touch.startLocation } }
+                .onEnded { _ in touchDown = nil },
+                including: drawing == nil && editingPoints == nil ? .all : .subviews)
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+                guard drawing == nil, editingPoints == nil, let touchDown,
+                      let coordinate = proxy.convert(touchDown, from: .local) else { return }
+                select(at: GeoPoint(lat: coordinate.latitude, lng: coordinate.longitude))
+            }, including: drawing == nil && editingPoints == nil ? .all : .subviews)
             .sensoryFeedback(.impact(weight: .light), trigger: drawing?.count ?? 0)
         }
         .ignoresSafeArea()
     }
 
     @MapContentBuilder
-    private var mapContent: some MapContent {
-        ZoneLayers(zones: model.tracker.zones, userAreaTint: Palette.blue, accuracy: model.tracker.accuracyCircle)
+    private func mapContent(_ proxy: MapProxy) -> some MapContent {
+        ZoneLayers(zones: model.tracker.zones.filter { $0.id != selectedAreaID }, userAreaTint: Palette.blue, you: model.you)
+        if let editingPoints {
+            SelectedAreaLayers(points: editingPoints)
+            ForEach(Array(editingPoints.enumerated()), id: \.offset) { index, point in
+                Annotation("", coordinate: point.coordinate, anchor: .center) {
+                    CornerHandle(number: index + 1, isDragging: draggingCorner == index)
+                        .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                            .onChanged { drag in moveCorner(index, to: drag.location, proxy: proxy) }
+                            .onEnded { _ in draggingCorner = nil })
+                }
+            }
+        } else if let area = selectedArea {
+            SelectedAreaLayers(points: area.polygon)
+        }
         if let drawing {
             DrawnShapeLayers(points: drawing)
-        } else if model.startable == nil, let here = model.fix?.coordinate {
+        } else if model.startable == nil, let here = model.you?.center.coordinate {
                 // The circle "Drop anchor here" would lock.
                 MapCircle(center: here, radius: AnchorRules.clampedRadius(model.radiusMeters))
                     .foregroundStyle(Palette.blue.opacity(0.12))
@@ -147,22 +207,33 @@ struct StartView: View {
     }
 
     private var topBar: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                PlaceStatusLine(place: model.place)
-                MapScaleBar(scope: mapScope)
+        VStack(alignment: .trailing, spacing: 10) {
+            // A selected area's glass bar gets its own row, top right, so nothing gets squeezed.
+            if let area = selectedArea {
+                AreaActionBar(name: area.name,
+                              edit: { editingPoints = area.polygon; isFollowing = false },
+                              delete: { isConfirmingDelete = true },
+                              close: { selectedAreaID = nil })
             }
-            Spacer(minLength: 8)
-            VStack(spacing: 10) {
-                Button { showingSettings = true } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Palette.ink)
-                        .frame(width: 44, height: 44)
-                        .glassCircle()
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 8) {
+                    PlaceStatusLine(place: model.place)
+                    MapScaleBar(scope: mapScope)
                 }
-                .accessibilityLabel("Settings")
-                zoomButtons
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 10) {
+                    if selectedArea == nil {
+                        Button { showingSettings = true } label: {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(Palette.ink)
+                                .frame(width: 44, height: 44)
+                                .glassCircle()
+                        }
+                        .accessibilityLabel("Settings")
+                    }
+                    zoomButtons
+                }
             }
         }
         .padding(.top, 8)
@@ -245,7 +316,46 @@ struct StartView: View {
             }
     }
 
+    private var selectedArea: Zone? {
+        model.userZones.first { $0.id == selectedAreaID }
+    }
+
+    /// Picks your area under the point (and moves the sheet out of the way), or lets go if there's none.
+    private func select(at point: GeoPoint) {
+        guard let area = DrawnArea.area(at: point, in: model.userZones) else {
+            selectedAreaID = nil
+            return
+        }
+        selectedAreaID = area.id
+        isSheetCollapsed = true
+    }
+
+    private func moveCorner(_ index: Int, to location: CGPoint, proxy: MapProxy) {
+        guard let points = editingPoints, points.indices.contains(index),
+              let coordinate = proxy.convert(location, from: .global) else { return }
+        draggingCorner = index
+        let moved = GeoPoint(lat: coordinate.latitude, lng: coordinate.longitude)
+        editingPoints = points.enumerated().map { $0.offset == index ? moved : $0.element }
+    }
+
+    private func saveEdit() {
+        guard let id = selectedAreaID, let points = editingPoints else { return }
+        if let problem = model.reshapeUserZone(id, to: points) {
+            model.notice = problem
+            return
+        }
+        editingPoints = nil
+    }
+
+    private func deleteSelected() {
+        guard let id = selectedAreaID else { return }
+        model.deleteUserZones([id])
+        isConfirmingDelete = false
+        selectedAreaID = nil
+    }
+
     private func startDrawing() {
+        selectedAreaID = nil
         isFollowing = false
         isSheetCollapsed = false
         drawing = []
@@ -285,6 +395,9 @@ struct StartView: View {
             if !model.notificationsAllowed || !model.hasPasscode {
                 warning
             }
+            if model.startable == nil, !model.motionAllowed {
+                motionPrompt
+            }
             if model.isFindingSpot {
                 FindingSpot()
             } else if let here = model.startable {
@@ -319,6 +432,27 @@ struct StartView: View {
         .padding(.top, 22)
         .padding(.bottom, 20)
         .glassPanel(cornerRadius: 38)
+    }
+
+    /// Without Motion & Fitness your anchor runs on GPS alone, which needs the extra margin (25 m becomes ~33 m).
+    @ViewBuilder
+    private var motionPrompt: some View {
+        if model.motionDenied {
+            Text("Turn on Motion & Fitness in Settings › Anchor to make your 25 m exact.")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Palette.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Button {
+                Task { await model.requestMotion() }
+            } label: {
+                Label("Make 25 m exact: allow Motion & Fitness", systemImage: "figure.walk")
+                    .font(.footnote.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .foregroundStyle(Palette.blue)
+        }
     }
 
     private var warning: some View {
@@ -464,26 +598,46 @@ private struct RadiusSlider: View {
     }
 }
 
+/// Waiting for sharp GPS before dropping the anchor ("Locking on… ±32 m, need ±15 m"), or for proof you're in a
+/// zone. After 15 s it offers dropping on what there is.
 private struct FindingSpot: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             HStack(spacing: 10) {
                 ProgressView()
-                Text(text).font(.subheadline.weight(.semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.isDroppingAnchor ? "Locking on to where you are…" : "Checking you're in the zone…")
+                        .font(.subheadline.weight(.semibold))
+                    Text(detail).font(.footnote.monospacedDigit()).foregroundStyle(Palette.secondary)
+                }
             }
-            Button("Cancel", action: model.cancelFindingSpot)
-                .font(.body.weight(.semibold))
-                .frame(minHeight: 44)
+            HStack(spacing: 10) {
+                Button("Cancel", action: model.cancelFindingSpot)
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                if showsDropAnyway {
+                    Button("Drop anyway", action: model.dropAnchorAnyway)
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(.white.opacity(0.7), in: Capsule())
+                }
+            }
         }
         .frame(maxWidth: .infinity)
+        .animation(.smooth(duration: 0.25), value: showsDropAnyway)
     }
 
-    private var text: String {
-        let label = model.isDroppingAnchor ? "Finding your spot…" : "Checking you're in the zone…"
-        guard let fix = model.fix, fix.horizontalAccuracy >= 0 else { return label }
-        return "\(label) GPS within \(Format.meters(fix.horizontalAccuracy))"
+    private var detail: String {
+        guard let fix = model.fix, fix.horizontalAccuracy >= 0 else { return "Waiting for GPS" }
+        let now = "GPS ±\(Int(fix.horizontalAccuracy.rounded())) m"
+        return model.isDroppingAnchor ? "\(now), need ±\(Int(ZoneTracker.lockOnMeters)) m" : now
+    }
+
+    private var showsDropAnyway: Bool {
+        guard model.isDroppingAnchor, let started = model.dropWaitStarted else { return false }
+        return model.now.timeIntervalSince(started) >= AppModel.dropAnywayAfterSeconds
     }
 }
 

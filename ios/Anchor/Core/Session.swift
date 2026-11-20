@@ -56,8 +56,8 @@ struct Session: Codable, Equatable, Sendable {
     /// Faked location readings seen during the session (nil in sessions saved before it was counted).
     let spoofed: Int?
 
-    static func start(config: SessionConfig, zone: Zone, at now: Date) -> Session {
-        Session(config: config, zone: zone, anchor: zone.center, anchorAccuracy: 0, startedAt: now, lastTick: now,
+    static func start(config: SessionConfig, zone: Zone, anchorAccuracy: Double = 0, at now: Date) -> Session {
+        Session(config: config, zone: zone, anchor: zone.center, anchorAccuracy: anchorAccuracy, startedAt: now, lastTick: now,
                 studiedSeconds: 0, phoneSeconds: 0, stintSeconds: 0, longestStintSeconds: 0, awaySeconds: 0,
                 onPhone: false, away: false, pickups: 0, finishedAt: nil, spoofed: 0)
     }
@@ -77,6 +77,14 @@ struct Session: Codable, Equatable, Sendable {
     var lockScreenPlace: String? { isDroppedAnchor ? nil : placeName }
 
     var spoofedReadings: Int { spoofed ?? 0 }
+
+    /// A dropped anchor moved onto a sharper reading (its first minute only). Clocks are untouched.
+    func reanchored(to zone: Zone, accuracy: Double) -> Session {
+        Session(config: config, zone: zone, anchor: zone.center, anchorAccuracy: accuracy, startedAt: startedAt,
+                lastTick: lastTick, studiedSeconds: studiedSeconds, phoneSeconds: phoneSeconds, stintSeconds: stintSeconds,
+                longestStintSeconds: longestStintSeconds, awaySeconds: awaySeconds, onPhone: onPhone, away: away,
+                pickups: pickups, finishedAt: finishedAt, spoofed: spoofed)
+    }
 
     /// One more faked reading seen.
     func countingSpoof() -> Session { copy(spoofed: spoofedReadings + 1) }

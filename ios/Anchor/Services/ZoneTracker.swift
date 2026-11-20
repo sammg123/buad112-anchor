@@ -15,6 +15,11 @@ final class ZoneTracker {
     private(set) var areas = AreaPresence()
     /// The running session's place when it isn't in the zones file: a dropped anchor's circle.
     private(set) var extraZone: Zone?
+    /// Walking from the motion chip, for the second key on your own anchor.
+    private(set) var walk = WalkEvidence()
+    /// Whether the motion chip is feeding `walk`. Without it, your anchor falls back to GPS alone with the
+    /// stricter whole-circle rule.
+    var usesWalkKey = false
 
     init(zones: [Zone]) {
         self.zones = zones
@@ -34,7 +39,7 @@ final class ZoneTracker {
         }
         let margin = self.margin(for: here)
         let added = allZones.filter { kept[$0.id] == nil }.map { zone in
-            (zone.id, BuildingPresence.unknown.updated(with: ZoneGeometry.fit(center: here.point, radius: margin, in: zone.polygon), at: now))
+            (zone.id, BuildingPresence.unknown.updated(with: fit(here, margin: margin, in: zone), at: now))
         }
         buildings = kept.merging(added) { old, _ in old }
     }
@@ -79,7 +84,7 @@ final class ZoneTracker {
         lastUsed = reading
         let margin = LocationFilter.margin(estimateAccuracy: estimate.accuracy, readingAccuracy: reading.accuracy)
         buildings = Dictionary(uniqueKeysWithValues: allZones.map { zone in
-            let fit = ZoneGeometry.fit(center: estimate.point, radius: margin, in: zone.polygon)
+            let fit = self.fit(estimate, margin: margin, in: zone)
             return (zone.id, (buildings[zone.id] ?? .unknown).updated(with: fit, at: now))
         })
         return verdict
@@ -104,7 +109,11 @@ final class ZoneTracker {
     }
 
     func lock(for zone: Zone, at now: Date) -> ZoneLock {
-        ZoneRules.lock(zone: zone, building: building(zone.id, at: now), areaID: areas.current(in: zone.id, at: now),
+        if zone.isDroppedAnchor {
+            return AnchorExit.lock(building: building(zone.id, at: now),
+                                   walkedOut: usesWalkKey ? hasWalkedOut(of: zone, at: now) : nil)
+        }
+        return ZoneRules.lock(zone: zone, building: building(zone.id, at: now), areaID: areas.current(in: zone.id, at: now),
                        rangingLive: areas.isRangingLive(at: now))
     }
 
@@ -127,11 +136,49 @@ final class ZoneTracker {
         freshEstimate(at: now).map { zone.depth(of: $0.point) }
     }
 
-    /// The circle to draw around you: the cleaned-up position and the margin used at edges.
-    var accuracyCircle: (center: GeoPoint, radius: Double)? {
-        guard let estimate else { return nil }
-        return (estimate.point, margin(for: estimate))
+    /// Your dot and its fuzz on the map: the smoothed position when it's fresh, else the latest raw reading.
+    func you(at now: Date, fallback: LocationReading?) -> (center: GeoPoint, radius: Double)? {
+        if let here = freshEstimate(at: now) { return (here.point, fuzz(for: here)) }
+        guard let fallback, fallback.accuracy >= 0 else { return nil }
+        return (fallback.point, fallback.accuracy)
     }
+
+    /// Your own anchor with the walking key: GPS says out once your dot is past the line (the walking key
+    /// guards against drift). Everything else, or without motion data: the whole margin circle has to be out.
+    private func fit(_ estimate: LocationEstimate, margin: Double, in zone: Zone) -> CircleFit {
+        if zone.isDroppedAnchor, usesWalkKey {
+            return AnchorExit.fit(center: estimate.point, fuzz: fuzz(for: estimate), in: zone)
+        }
+        return ZoneGeometry.fit(center: estimate.point, radius: margin, in: zone.polygon)
+    }
+
+    /// How unsure the position is, as drawn around your dot (the smoothed error, at least 3 m).
+    func fuzz(for estimate: LocationEstimate) -> Double {
+        max(estimate.accuracy, Self.minFuzzMeters)
+    }
+
+    private static let minFuzzMeters = 3.0
+
+    func walked(_ segment: WalkSegment) {
+        walk = walk.adding(segment)
+    }
+
+    func resetWalk() {
+        walk = WalkEvidence()
+    }
+
+    /// Whether you've walked far enough out of your anchor's circle for the walking key.
+    func hasWalkedOut(of zone: Zone, at now: Date) -> Bool {
+        walk.netMeters(at: now) >= AnchorExit.requiredWalkMeters(radius: zone.enclosingCircle.radius)
+    }
+
+    /// Sharp enough to drop an anchor on: a fresh position from readings within 15 m.
+    func isLockedOn(at now: Date) -> Bool {
+        guard let here = freshEstimate(at: now), let reading = lastUsed else { return false }
+        return reading.accuracy <= Self.lockOnMeters && here.accuracy <= Self.lockOnMeters
+    }
+
+    static let lockOnMeters = 15.0
 
     /// The edge margin for a position, using the last reading's reported error.
     func margin(for estimate: LocationEstimate) -> Double {

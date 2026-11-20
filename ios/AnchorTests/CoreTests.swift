@@ -794,34 +794,85 @@ struct DroppedAnchorTests {
     }
 
     @MainActor
-    @Test("sitting 8 m inside an area, GPS drifting 13 m outward with 10 m readings doesn't free you")
+    @Test("sitting 8 m inside a drawn area's edge, GPS drifting 5 m past it doesn't free you")
     func drift() {
+        let area = DrawnArea.zone(named: "Desk", points: square, id: "mine-1")
+        let tracker = ZoneTracker(zones: [area])
+        for s in 0..<30 {
+            let time = t0.addingTimeInterval(Double(s))
+            // The edge is 50 m east; you sit at 42 m, GPS says 55 m.
+            tracker.received(LocationReading(point: offset(campus, 55, 0), accuracy: 10, time: time, isSpoofed: false), at: time)
+        }
+        #expect(tracker.building(area.id, at: t0.addingTimeInterval(29)) != .outside)
+    }
+
+    @MainActor
+    @Test("sitting at your anchor, GPS drifting past the line doesn't free you: you didn't walk")
+    func anchorDrift() {
         let tracker = ZoneTracker(zones: [])
+        tracker.usesWalkKey = true
         let spot = Zone.droppedAnchor(center: campus, radius: 25)
         tracker.setExtraZone(spot)
         for s in 0..<30 {
             let time = t0.addingTimeInterval(Double(s))
-            // You're 17 m out from the anchor (8 m inside the edge); GPS says 30 m (5 m outside).
             tracker.received(LocationReading(point: offset(campus, 30, 0), accuracy: 10, time: time, isSpoofed: false), at: time)
         }
-        #expect(tracker.building(spot.id, at: t0.addingTimeInterval(29)) != .outside)
+        let now = t0.addingTimeInterval(29)
+        #expect(tracker.building(spot.id, at: now) == .outside)
+        #expect(tracker.lock(for: spot, at: now) == .locked(areaID: nil))
+        // Shaking the phone at the desk: steps, but GPS stays put.
+        let shaken = ZoneTracker(zones: [])
+        shaken.usesWalkKey = true
+        shaken.setExtraZone(spot)
+        for s in 0..<30 {
+            let time = t0.addingTimeInterval(Double(s))
+            shaken.walked(WalkSegment(time: time, meters: 1.5, heading: 0))
+            shaken.received(LocationReading(point: offset(campus, 2, 0), accuracy: 5, time: time, isSpoofed: false), at: time)
+        }
+        #expect(shaken.lock(for: spot, at: now) == .locked(areaID: nil))
     }
 
     @MainActor
-    @Test("with steady 5 m GPS, a 25 m spot frees you about 33 m out, not 46")
+    @Test("on GPS alone (no motion), the whole fuzz circle has to clear the line")
+    func gpsOnly() {
+        let tracker = ZoneTracker(zones: [])
+        let spot = Zone.droppedAnchor(center: campus, radius: 25)
+        tracker.setExtraZone(spot)
+        for s in 0..<15 {
+            let time = t0.addingTimeInterval(Double(s))
+            tracker.received(LocationReading(point: offset(campus, 30, 0), accuracy: 5, time: time, isSpoofed: false), at: time)
+        }
+        #expect(tracker.building(spot.id, at: t0.addingTimeInterval(14)) != .outside)
+    }
+
+    @Test("the anchor settles onto sharper readings for its first minute, while you're still at it")
+    func settles() {
+        #expect(AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 8, sessionAge: 20))
+        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 8, sessionAge: 61))
+        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 6, estimateAccuracy: 6, metersFromAnchor: 2, sessionAge: 20))
+        // Walking away isn't settling.
+        #expect(!AnchorRules.shouldSettle(anchorAccuracy: 18, estimateAccuracy: 6, metersFromAnchor: 25, sessionAge: 20))
+    }
+
+    @MainActor
+    @Test("walking out with steady GPS, a 25 m spot frees you right past 25 m")
     func unlockDistance() {
         func state(atMeters meters: Double) -> BuildingPresence.State {
             let tracker = ZoneTracker(zones: [])
+            tracker.usesWalkKey = true
             let spot = Zone.droppedAnchor(center: campus, radius: 25)
             tracker.setExtraZone(spot)
             for s in 0..<15 {
                 let time = t0.addingTimeInterval(Double(s))
+                tracker.walked(WalkSegment(time: time, meters: 2, heading: .pi / 2))
                 tracker.received(LocationReading(point: offset(campus, meters, 0), accuracy: 5, time: time, isSpoofed: false), at: time)
             }
-            return tracker.building(spot.id, at: t0.addingTimeInterval(14))
+            let now = t0.addingTimeInterval(14)
+            if tracker.building(spot.id, at: now) == .outside { #expect(tracker.lock(for: spot, at: now) == .free) }
+            return tracker.building(spot.id, at: now)
         }
-        #expect(state(atMeters: 31) != .outside)
-        #expect(state(atMeters: 34) == .outside)
+        #expect(state(atMeters: 24) == .inside)
+        #expect(state(atMeters: 27) == .outside)
         #expect(state(atMeters: 20) == .inside)
     }
 
@@ -1016,5 +1067,89 @@ struct NoGraceAfterMinuteTests {
         #expect(PickupRule.isOnPhone(outsideAnchorSince: unlocked, now: unlocked.addingTimeInterval(2), grace: grace))
         #expect(Escalation.isAlarm(phoneSeconds: 75))
         #expect(Escalation.isContinuousVibration(phoneSeconds: 75))
+    }
+}
+
+// MARK: - Selecting and editing your areas
+
+@Suite("Editing your areas")
+struct EditAreaTests {
+    private func pts(_ list: [(Double, Double)]) -> [GeoPoint] { list.map { offset(campus, $0.0, $0.1) } }
+
+    @Test("holding inside your area picks it; the smaller one wins where areas overlap; library zones aren't picked")
+    func hitTest() {
+        let big = DrawnArea.zone(named: "Big", points: pts([(-100, -100), (100, -100), (100, 100), (-100, 100)]), id: "mine-big")
+        let small = DrawnArea.zone(named: "Small", points: pts([(-10, -10), (10, -10), (10, 10), (-10, 10)]), id: "mine-small")
+        #expect(DrawnArea.area(at: campus, in: [big, small, library])?.id == "mine-small")
+        #expect(DrawnArea.area(at: offset(campus, 50, 50), in: [big, small, library])?.id == "mine-big")
+        #expect(DrawnArea.area(at: offset(campus, 500, 0), in: [big, small]) == nil)
+        #expect(DrawnArea.area(at: campus, in: [library]) == nil)
+    }
+
+    @Test("moving corners keeps the area's id and name, and refuses outlines that cross")
+    func reshape() throws {
+        let area = DrawnArea.zone(named: "Desk", points: pts([(0, 0), (40, 0), (40, 30), (0, 30)]), id: "mine-1")
+        let bigger = try DrawnArea.reshaped(area, to: pts([(0, 0), (60, 0), (60, 45), (0, 45)])).get()
+        #expect(bigger.id == "mine-1")
+        #expect(bigger.name == "Desk")
+        #expect(abs(DrawnArea.squareMeters(bigger.polygon) - 2700) < 10)
+        let crossed = DrawnArea.reshaped(area, to: pts([(0, 0), (40, 30), (40, 0), (0, 30)]))
+        #expect(throws: DrawnArea.Problem.crossesItself) { try crossed.get() }
+    }
+}
+
+// MARK: - Two keys: GPS and walking
+
+@Suite("Two-key anchor exit")
+struct TwoKeyExitTests {
+    private func walk(_ legs: [(meters: Double, headingDegrees: Double, at: Double)]) -> WalkEvidence {
+        legs.reduce(WalkEvidence()) {
+            $0.adding(WalkSegment(time: t0.addingTimeInterval($1.at), meters: $1.meters, heading: $1.headingDegrees * .pi / 180))
+        }
+    }
+
+    @Test("walking counts by how far the path ends from where it began: straight out counts, pacing doesn't")
+    func netDistance() {
+        let straight = walk([(10, 0, 1), (10, 5, 5), (10, -5, 9)])
+        #expect(abs(straight.netMeters(at: t0.addingTimeInterval(10)) - 30) < 1)
+        let pacing = walk([(10, 0, 1), (10, 180, 5), (10, 0, 9), (10, 180, 13)])
+        #expect(pacing.netMeters(at: t0.addingTimeInterval(14)) < 1)
+    }
+
+    @Test("a pocketed phone turned sideways still counts: only the shape of the path matters")
+    func rotationFree() {
+        let ahead = walk([(10, 0, 1), (10, 90, 5)])
+        let sideways = walk([(10, 90, 1), (10, 180, 5)])
+        #expect(abs(ahead.netMeters(at: t0.addingTimeInterval(6)) - sideways.netMeters(at: t0.addingTimeInterval(6))) < 0.01)
+    }
+
+    @Test("walking older than 3 minutes no longer counts")
+    func window() {
+        let old = walk([(30, 0, 0)])
+        #expect(old.netMeters(at: t0.addingTimeInterval(179)) > 29)
+        #expect(old.netMeters(at: t0.addingTimeInterval(181)) == 0)
+    }
+
+    @Test("you have to walk at least 60% of the radius (10 m minimum) for the walking key")
+    func walkKey() {
+        #expect(AnchorExit.requiredWalkMeters(radius: 25) == 15)
+        #expect(AnchorExit.requiredWalkMeters(radius: 10) == 10)
+    }
+
+    @Test("GPS key: out once your fuzz circle is at least half outside the circle, i.e. your dot is past the line")
+    func halfOut() {
+        let spot = Zone.droppedAnchor(center: campus, radius: 25)
+        #expect(AnchorExit.fit(center: offset(campus, 23, 0), fuzz: 6, in: spot) == .mostlyInside)
+        #expect(AnchorExit.fit(center: offset(campus, 26, 0), fuzz: 6, in: spot) == .fullyOutside)
+    }
+
+    @Test("free only with both keys; GPS alone is drift, walking alone is shaking")
+    func bothKeys() {
+        #expect(AnchorExit.lock(building: .outside, walkedOut: true) == .free)
+        #expect(AnchorExit.lock(building: .outside, walkedOut: false) == .locked(areaID: nil))
+        #expect(AnchorExit.lock(building: .inside, walkedOut: true) == .locked(areaID: nil))
+        #expect(AnchorExit.lock(building: .unknown, walkedOut: true) == .undecided)
+        // No motion data (permission off): GPS alone decides, with the stricter whole-circle rule upstream.
+        #expect(AnchorExit.lock(building: .outside, walkedOut: nil) == .free)
     }
 }
