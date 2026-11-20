@@ -650,7 +650,8 @@ final class AppModel {
         let outside = !isAppActive && isDeviceUnlocked
         outsideAnchorSince = outside ? (outsideAnchorSince ?? now) : nil
         let onPhone = PickupRule.isOnPhone(outsideAnchorSince: outsideAnchorSince, now: now,
-                                           grace: next.config.graceSeconds)
+                                           grace: Escalation.graceSeconds(configured: next.config.graceSeconds,
+                                                                          phoneSeconds: next.phoneSeconds))
         next = next.settingPhone(onPhone, at: now).advanced(to: now)
         apply(next)
     }
@@ -683,7 +684,8 @@ final class AppModel {
     /// While unlocked and out of Anchor but still inside the grace period: when it runs out.
     private func graceEndsAt(for session: Session) -> Date? {
         guard let since = outsideAnchorSince, !session.onPhone, !session.away else { return nil }
-        return since.addingTimeInterval(session.config.graceSeconds)
+        let grace = Escalation.graceSeconds(configured: session.config.graceSeconds, phoneSeconds: session.phoneSeconds)
+        return grace > 0 ? since.addingTimeInterval(grace) : nil
     }
 
     private func applyBuzzes(before: Session?, next: Session) {

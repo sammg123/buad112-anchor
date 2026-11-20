@@ -33,7 +33,7 @@ struct SettingsView: View {
         Section {
             TimelineRow(time: "0:00", tint: AnchorPalette.grace, symbol: "hourglass",
                         title: "Grace period, \(Int(model.graceSeconds)) s",
-                        detail: "Unlocking is free this long. The island turns gray and counts it down.")
+                        detail: "Unlocking is free this long, until you've used 1:00 of phone time. After that there's no grace: every unlock sirens and vibrates at once.")
             ForEach(Escalation.annoyances(graceSeconds: model.graceSeconds, library: model.library)) { item in
                 TimelineRow(time: "+" + Format.clock(item.startsAt), tint: tint(for: item.startsAt), symbol: item.symbol,
                             title: item.title, detail: item.detail)
