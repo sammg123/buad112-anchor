@@ -5,9 +5,10 @@ import UIKit
 struct PermissionsView: View {
     @Environment(AppModel.self) private var model
     @State private var askedNotifications = false
+    @State private var askedMotion = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
+        VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 14) {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .fill(Palette.blue)
@@ -26,6 +27,9 @@ struct PermissionsView: View {
                 PermissionRow(symbol: "location.fill", tint: Palette.blue, title: "Location", tag: "REQUIRED",
                               detail: "To know where your spot is and when you leave it. Choose Always when iOS asks.",
                               done: model.hasLocation)
+                PermissionRow(symbol: "figure.walk", tint: Palette.blue, title: "Motion & Fitness", tag: "RECOMMENDED",
+                              detail: "Counts your steps and turns, so Stop unlocks when you really walk out of your circle. Indoor GPS is off by 20 to 60 m.",
+                              done: model.motionAllowed)
                 PermissionRow(symbol: "bell.fill", tint: Palette.red, title: "Notifications", tag: "RECOMMENDED",
                               detail: "The annoying part. Without them Anchor can't buzz you while you scroll.",
                               done: model.notificationsAllowed)
@@ -56,6 +60,17 @@ struct PermissionsView: View {
             } else if !model.hasLocation {
                 Button("Allow Location") { model.requestLocation() }
                     .buttonStyle(ProminentButtonStyle())
+            } else if !model.motionAllowed && !askedMotion && !model.motionDenied {
+                Button("Allow Motion") {
+                    Task {
+                        await model.requestMotion()
+                        askedMotion = true
+                    }
+                }
+                .buttonStyle(ProminentButtonStyle())
+                Button("Not now") { askedMotion = true }
+                    .font(.body.weight(.semibold))
+                    .frame(minHeight: 44)
             } else if !model.notificationsAllowed && !askedNotifications {
                 Button("Turn On Buzzing") {
                     Task {

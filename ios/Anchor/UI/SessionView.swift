@@ -14,7 +14,7 @@ struct SessionView: View {
                     TimerCard(session: session)
                     Spacer()
                     if session.away {
-                        AwayCard(session: session)
+                        AwayCard(session: session, paused: model.isPaused)
                     } else {
                         lockedFooter
                     }
@@ -46,8 +46,16 @@ struct SessionView: View {
 
     private var lockedFooter: some View {
         VStack(spacing: 10) {
-            if let meters = model.distanceToAnchor {
-                Text("\(Format.meters(meters)) from your anchor")
+            if !model.notificationsAllowed {
+                Text("Notifications are off, so Anchor can't buzz you")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Palette.red)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .glassCapsule()
+            }
+            if let meters = model.usesSteps ? model.walked.distance : model.distanceToAnchor {
+                Text("\(Format.meters(meters)) from your anchor\(model.usesSteps ? " by your steps" : "")")
                     .font(.footnote.weight(.semibold))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
@@ -63,8 +71,7 @@ struct SessionView: View {
     }
 
     private var lockedText: String {
-        guard let meters = model.distanceToAnchor else { return "Stop unlocks when you leave the circle" }
-        let left = max(1, model.unlockDistance - meters)
+        guard let left = model.metersToUnlock else { return "Stop unlocks when you leave the circle" }
         return "Walk \(Format.meters(left)) to unlock Stop"
     }
 
@@ -76,6 +83,7 @@ struct SessionView: View {
 }
 
 private struct TimerCard: View {
+    @Environment(AppModel.self) private var model
     let session: Session
 
     var body: some View {
@@ -83,7 +91,16 @@ private struct TimerCard: View {
             HStack {
                 status
                 Spacer()
-                Text("of \(session.config.studyMinutes) min").font(.subheadline.weight(.semibold)).foregroundStyle(Palette.secondary)
+                if AppModel.showsDevTools {
+                    Button(model.isPaused ? "Resume" : "Pause", action: model.togglePause)
+                        .font(.subheadline.weight(.bold))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 32)
+                        .background(Palette.ink.opacity(0.08), in: Capsule())
+                        .accessibilityHint("Developer pause for testing")
+                } else {
+                    Text("of \(session.config.studyMinutes) min").font(.subheadline.weight(.semibold)).foregroundStyle(Palette.secondary)
+                }
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(Format.clock(session.remainingSeconds))
@@ -109,7 +126,9 @@ private struct TimerCard: View {
     }
 
     private var status: some View {
-        let (text, color): (String, Color) = session.away
+        let (text, color): (String, Color) = model.isPaused
+            ? ("Paused (dev)", Palette.secondary)
+            : session.away
             ? ("Away · phone's free", Palette.away)
             : session.onPhone ? ("On your phone", Palette.red) : ("Studying · phone down", Palette.blue)
         return HStack(spacing: 8) {
@@ -130,11 +149,13 @@ private struct TimerCard: View {
 private struct AwayCard: View {
     @Environment(AppModel.self) private var model
     let session: Session
+    let paused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("YOU LEFT YOUR SPOT").font(.footnote.weight(.bold)).tracking(0.4).foregroundStyle(Palette.away)
+                Text(paused ? "PAUSED FOR TESTING" : "YOU LEFT YOUR SPOT")
+                    .font(.footnote.weight(.bold)).tracking(0.4).foregroundStyle(paused ? Palette.secondary : Palette.away)
                 Text("Your phone is free.").font(.system(size: 28, weight: .bold)).tracking(-0.6)
                 Text("The timer is paused at \(Format.clock(session.remainingSeconds)). Walk back to keep going, or stop here.")
                     .font(.callout)

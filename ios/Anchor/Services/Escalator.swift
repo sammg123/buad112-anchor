@@ -1,19 +1,19 @@
 import AVFoundation
 import os
 
-/// The loud part: a voice that reads your phone time over whatever is playing, then an alarm that loops until
-/// you lock the phone or walk away. Plays even on silent (the playback category ignores the switch) and from the
-/// background, because Anchor stays running for location and declares background audio. Other audio is ducked,
-/// never stopped, which is what iOS allows an app to start from the background.
+/// Anchor's sound. During a session a silent track keeps Anchor running in the background (iOS would otherwise
+/// pause it while the phone sits still and GPS has nothing new), so it can see every unlock. On the phone it adds
+/// a voice that reads your phone time and an alarm that loops until you lock the phone or walk away. Everything
+/// mixes with other audio and plays even on silent.
 @MainActor
 final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
     private nonisolated static let log = Logger(subsystem: "com.sammg123.anchor", category: "escalator")
-    private static let releaseRetryDelay: Duration = .milliseconds(400)
 
     private let session = AVAudioSession.sharedInstance()
     private let speech = AVSpeechSynthesizer()
+    private var keepAlive: AVAudioPlayer?
     private var alarm: AVAudioPlayer?
-    /// The alarm is wanted (the model says so), whether or not it is playing right now.
+    private var wantsKeepAlive = false
     private var wantsAlarm = false
     private var interruptionObserver: NSObjectProtocol?
 
@@ -29,6 +29,24 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
+    // MARK: - Session lifetime
+
+    func startKeepAlive() {
+        wantsKeepAlive = true
+        guard keepAlive?.isPlaying != true else { return }
+        keepAlive = loop("silence", volume: 1)
+    }
+
+    func stopEverything() {
+        wantsKeepAlive = false
+        keepAlive?.stop()
+        keepAlive = nil
+        stopEscalation()
+        release()
+    }
+
+    // MARK: - On the phone
+
     func speak(_ line: String) {
         guard !wantsAlarm, activate() else { return }
         let utterance = AVSpeechUtterance(string: line)
@@ -42,7 +60,7 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
         wantsAlarm = on
         if on {
             speech.stopSpeaking(at: .immediate)
-            startAlarm()
+            alarm = loop("alarm", volume: 1)
         } else {
             alarm?.stop()
             alarm = nil
@@ -50,7 +68,8 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    func stopAll() {
+    /// Voice and alarm off; the keep-alive track keeps playing.
+    func stopEscalation() {
         guard wantsAlarm || alarm != nil || speech.isSpeaking else { return }
         wantsAlarm = false
         alarm?.stop()
@@ -58,8 +77,6 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
         speech.stopSpeaking(at: .immediate)
         release()
     }
-
-    // MARK: - Speech finished
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor [weak self] in self?.release() }
@@ -71,36 +88,40 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
 
     // MARK: - Audio session
 
-    private func startAlarm() {
-        guard alarm?.isPlaying != true else { return }
-        guard activate(), let url = Bundle.main.url(forResource: "alarm", withExtension: "wav") else {
-            Self.log.error("alarm could not start")
-            return
+    private func loop(_ name: String, volume: Float) -> AVAudioPlayer? {
+        guard activate(), let url = Bundle.main.url(forResource: name, withExtension: "wav") else {
+            Self.log.error("\(name, privacy: .public) could not start")
+            return nil
         }
         do {
             let player = try AVAudioPlayer(contentsOf: url)
             player.numberOfLoops = -1
-            player.volume = 1
+            player.volume = volume
             guard player.play() else {
-                Self.log.error("alarm refused to play")
-                return
+                Self.log.error("\(name, privacy: .public) refused to play")
+                return nil
             }
-            alarm = player
+            return player
         } catch {
-            Self.log.error("alarm failed: \(error.localizedDescription, privacy: .public)")
+            Self.log.error("\(name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 
-    /// A call, Siri or a timer stops the alarm; bring it back if it is still wanted.
+    /// A call, Siri or a timer stops our audio; bring back whatever is still wanted.
     private func resumeAfterInterruption() {
-        guard wantsAlarm else { return }
-        alarm = nil
-        startAlarm()
+        if wantsKeepAlive {
+            keepAlive = nil
+            startKeepAlive()
+        }
+        if wantsAlarm {
+            alarm = loop("alarm", volume: 1)
+        }
     }
 
     private func activate() -> Bool {
         do {
-            try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers])
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
             return true
         } catch {
@@ -109,21 +130,13 @@ final class Escalator: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    /// Give other apps their volume back once nothing of ours is playing. iOS can report the session busy right
-    /// after audio stops, so try once more shortly after.
-    private func release(retrying: Bool = true) {
-        guard !wantsAlarm, alarm == nil, !speech.isSpeaking else { return }
+    /// Let the session go once nothing of ours needs it.
+    private func release() {
+        guard !wantsKeepAlive, !wantsAlarm, alarm == nil, !speech.isSpeaking else { return }
         do {
             try session.setActive(false, options: [.notifyOthersOnDeactivation])
         } catch {
-            guard retrying else {
-                Self.log.error("audio session release failed: \(error.localizedDescription, privacy: .public)")
-                return
-            }
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: Self.releaseRetryDelay)
-                self?.release(retrying: false)
-            }
+            Self.log.error("audio session release failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

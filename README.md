@@ -116,7 +116,11 @@ A native version for the phone itself, shipped through TestFlight.
   0:00 the Lock Screen / Dynamic Island Live Activity turns red; from 0:15 a Time Sensitive notification buzzes every
   15 s, every 5 s after 1:00; a voice reads your phone time every 30 s; from 2:00 an alarm loops. Locking the phone or
   opening Anchor stops all of it.
-- **Away** past the unlock distance, the phone is free, nothing counts, and Stop unlocks.
+- **Away** past the lock radius, the phone is free, nothing counts, and Stop unlocks. Distance comes from your own
+  steps and turns (pedometer + gyroscope, added up as a vector from the anchor), so walking back cancels walking
+  out; GPS only decides on its own when it is sharper than 20 m. Without Motion & Fitness access, GPS plus slack decides.
+- **Staying awake:** during a session a silent audio track keeps Anchor running in the background, so it sees every
+  unlock even when the phone sits still. TestFlight and debug builds show a dev Pause button on the session screen.
 - **Black and white** (Settings) needs two one-step shortcuts the student makes once (*Anchor Gray* and *Anchor Color*,
   each a *Set Color Filters* action). iOS has no API for an app to do this itself.
 - **Not in this build:** locking other apps. That needs Apple's Screen Time (Family Controls) distribution entitlement,

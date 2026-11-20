@@ -319,3 +319,71 @@ struct FormatTests {
         #expect(SetupInput.presets == [25, 45, 60, 90])
     }
 }
+
+// MARK: - Dead reckoning
+
+@Suite("Dead reckoning")
+struct DeadReckoningTests {
+    private let north = 0.0
+    private let south = Double.pi
+    private let northwest = -Double.pi / 4
+
+    @Test("24 m north then 3 m back south is 21 m from the anchor: still locked at 25 m")
+    func backtrack() {
+        let p = DeadReckoning.origin.walking(24, heading: north).walking(3, heading: south)
+        #expect(abs(p.distance - 21) < 0.001)
+        #expect(!p.isOutside(radius: 25))
+        #expect(abs(p.walkedMeters - 27) < 0.001)
+    }
+
+    @Test("10 m north then 20 m northwest is about 28 m out: unlocked at 25 m")
+    func dogleg() {
+        let p = DeadReckoning.origin.walking(10, heading: north).walking(20, heading: northwest)
+        #expect(abs(p.distance - 27.98) < 0.05)
+        #expect(p.isOutside(radius: 25))
+    }
+
+    @Test("pacing back and forth never adds up")
+    func pacing() {
+        var p = DeadReckoning.origin
+        for _ in 0..<10 { p = p.walking(8, heading: north).walking(8, heading: south) }
+        #expect(p.distance < 0.001)
+        #expect(abs(p.walkedMeters - 160) < 0.001)
+    }
+
+    @Test("negative or zero steps change nothing")
+    func ignoresNonsense() {
+        #expect(DeadReckoning.origin.walking(-5, heading: north) == DeadReckoning.origin)
+        #expect(DeadReckoning.origin.walking(0, heading: north) == DeadReckoning.origin)
+    }
+
+    @Test("turning is measured around gravity, so it works flat on a desk or upright in a pocket")
+    func yawRate() {
+        // Flat, face up: gravity points out the back (-z). Spinning left about z is a left turn.
+        #expect(Turning.yawRate(rotation: (0, 0, 1), gravity: (0, 0, -1)) == -1)
+        // Upright in a pocket: gravity points out the bottom (-y). Spinning left about y is the same left turn.
+        #expect(Turning.yawRate(rotation: (0, 1, 0), gravity: (0, -1, 0)) == -1)
+        // Tilting forward is not turning.
+        #expect(Turning.yawRate(rotation: (1, 0, 0), gravity: (0, 0, -1)) == 0)
+    }
+
+    @Test("the average heading over a stretch handles the wrap past north")
+    func circularMean() {
+        let mean = Turning.circularMean([0.1, -0.1, 2 * .pi - 0.05])
+        #expect(mean.map { abs($0) < 0.06 } == true)
+        #expect(Turning.circularMean([]) == nil)
+    }
+
+    @Test("away when steps say outside, or when GPS is sharp and says outside")
+    func awayRule() {
+        let inside = DeadReckoning.origin.walking(10, heading: north)
+        let outside = DeadReckoning.origin.walking(30, heading: north)
+        #expect(AnchorRules.isAwayCombined(motion: outside, gpsDistance: nil, gpsAccuracy: nil, radius: 25))
+        #expect(!AnchorRules.isAwayCombined(motion: inside, gpsDistance: 63, gpsAccuracy: 45, radius: 25))
+        #expect(AnchorRules.isAwayCombined(motion: inside, gpsDistance: 50, gpsAccuracy: 10, radius: 25))
+        #expect(!AnchorRules.isAwayCombined(motion: inside, gpsDistance: 30, gpsAccuracy: 10, radius: 25))
+        // No step data at all: fall back to the GPS rule with its slack.
+        #expect(AnchorRules.isAwayCombined(motion: nil, gpsDistance: 80, gpsAccuracy: 40, radius: 25))
+        #expect(!AnchorRules.isAwayCombined(motion: nil, gpsDistance: 60, gpsAccuracy: 40, radius: 25))
+    }
+}

@@ -3,6 +3,7 @@ import LocalAuthentication
 import Observation
 import SwiftUI
 import UIKit
+import os
 
 /// Runs a session: turns location, the lock state and Anchor being on screen into the session's three clocks,
 /// and turns the session into buzzes, the voice, the alarm and the Live Activity. Every rule lives in `Session`,
@@ -14,10 +15,11 @@ final class AppModel {
 
     /// A fix worse than this never decides whether you are away.
     static let maxDecidingAccuracy = 100.0
-    /// Leaving Anchor only counts as picking up the phone after this long, so unlocking straight into Anchor
-    /// (which wakes Anchor in the background for a moment) is not a pickup.
-    private static let pickupDebounceSeconds = 2.0
+    /// Unlocking straight into Anchor shows Anchor in the background for a moment; a "pickup" this short that ends
+    /// in Anchor is taken back.
+    private static let quickReturnSeconds = 3.0
     private static let saveEverySeconds = 10.0
+    private nonisolated static let log = Logger(subsystem: "com.sammg123.anchor", category: "session")
     #if DEBUG
     /// Simulator screenshots: the Always prompt would cover the screen.
     private static let skipsAlwaysPrompt = ProcessInfo.processInfo.arguments.contains("-onboarded")
@@ -33,9 +35,22 @@ final class AppModel {
     private(set) var now = Date()
     private(set) var locationStatus: CLAuthorizationStatus = .notDetermined
     private(set) var notificationsAllowed = false
+    private(set) var motionAllowed = MotionTracker.isAuthorized
+    /// Where your steps put you relative to the anchor.
+    private(set) var walked = DeadReckoning.origin
     private(set) var hasPasscode = true
     private(set) var isFindingSpot = false
     private(set) var hasOnboarded: Bool
+    /// Dev pause for testing: everything stops as if you had walked away (Stop unlocks too). TestFlight and
+    /// debug builds only.
+    private(set) var isPaused = false
+    static let showsDevTools: Bool = {
+        #if DEBUG
+        return true
+        #else
+        return Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+        #endif
+    }()
     var minutes: Int { didSet { savePreferences() } }
     var radiusMeters: Double { didSet { savePreferences() } }
     var grayscale: Bool { didSet { savePreferences() } }
@@ -46,10 +61,10 @@ final class AppModel {
     private let buzzer = Buzzer()
     private let escalator = Escalator()
     private let liveActivity = LiveActivityController()
+    private let motion = MotionTracker()
     /// Launched in the background (iOS relaunching a session), Anchor is not on screen until a scene says so.
     private var isAppActive = UIApplication.shared.applicationState != .background
     private var isDeviceUnlocked = true
-    private var wantsPhoneSince: Date?
     private var shortcutGraceUntil = Date.distantPast
     private var pendingConfig: SessionConfig?
     /// The session ended in the background in black and white; color comes back when Anchor is opened.
@@ -68,6 +83,7 @@ final class AppModel {
         locationStatus = location.status
         location.onFix = { [weak self] fix in self?.received(fix) }
         location.onAuthorizationChange = { [weak self] status in self?.locationStatus = status }
+        motion.onUpdate = { [weak self] position in self?.stepped(to: position) }
         observeLockState()
         restore()
         location.startForeground()
@@ -104,6 +120,17 @@ final class AppModel {
 
     var isStopUnlocked: Bool { session?.away ?? false }
 
+    /// Steps decide when they can; GPS is the fallback.
+    var usesSteps: Bool { motionAllowed && MotionTracker.isSupported }
+
+    /// How much farther to walk before Stop unlocks.
+    var metersToUnlock: Double? {
+        guard let session else { return nil }
+        if usesSteps { return max(1, session.config.radiusMeters - walked.distance) }
+        guard let meters = distanceToAnchor else { return nil }
+        return max(1, unlockDistance - meters)
+    }
+
     /// The session as of this second, for display.
     var live: Session? { session?.advanced(to: now) }
 
@@ -112,6 +139,13 @@ final class AppModel {
     func requestLocation() {
         if locationStatus == .notDetermined { location.requestWhenInUse() }
     }
+
+    func requestMotion() async {
+        _ = await motion.requestPermission()
+        motionAllowed = MotionTracker.isAuthorized
+    }
+
+    var motionDenied: Bool { MotionTracker.isDenied }
 
     func requestNotifications() async {
         notificationsAllowed = await buzzer.requestAuthorization()
@@ -126,6 +160,7 @@ final class AppModel {
         locationStatus = location.status
         hasPasscode = LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
         notificationsAllowed = await buzzer.isAuthorized()
+        motionAllowed = MotionTracker.isAuthorized
         if locationStatus == .authorizedWhenInUse, !Self.skipsAlwaysPrompt { location.requestAlways() }
     }
 
@@ -158,6 +193,12 @@ final class AppModel {
         end(current)
     }
 
+    func togglePause() {
+        guard Self.showsDevTools, session != nil else { return }
+        isPaused.toggle()
+        reconcile()
+    }
+
     func startOver() {
         finished = nil
         store.saveFinished(nil)
@@ -178,6 +219,9 @@ final class AppModel {
 
     func setAppActive(_ active: Bool) {
         isAppActive = active
+        if active, let current = session, current.onPhone, current.stintSeconds <= Self.quickReturnSeconds {
+            apply(current.lockedPhone(at: Date(), unseenSeconds: Self.quickReturnSeconds))
+        }
         if active {
             Task { await refreshPermissions() }
             if needsColorBack {
@@ -217,7 +261,6 @@ final class AppModel {
     /// iOS says "locked" about 10 s after the fact; those seconds were not phone time.
     private func deviceLocked() {
         isDeviceUnlocked = false
-        wantsPhoneSince = nil
         guard let current = session, current.onPhone else { return reconcile() }
         apply(current.lockedPhone(at: Date(), unseenSeconds: Ladder.lockLagSeconds))
     }
@@ -231,7 +274,11 @@ final class AppModel {
         store.saveFinished(nil)
         let started = Session.start(config: config, anchor: anchorFix.point,
                                     anchorAccuracy: anchorFix.horizontalAccuracy, at: Date())
+        walked = .origin
+        store.saveWalked(.origin)
         location.startSession()
+        motion.start(from: .origin)
+        escalator.startKeepAlive()
         startTicker()
         apply(started)
         liveActivity.start(for: started, at: Date())
@@ -249,7 +296,10 @@ final class AppModel {
         // A ladder scheduled before Anchor was ended would keep buzzing for nobody.
         buzzer.cancelLadder()
         liveActivity.adoptExisting()
+        walked = store.loadWalked() ?? .origin
         location.startSession()
+        motion.start(from: walked)
+        escalator.startKeepAlive()
         startTicker()
         apply(resumed)
     }
@@ -267,10 +317,14 @@ final class AppModel {
     private func reconcile() {
         now = Date()
         guard var next = session else { return }
-        if let away = isAway() { next = next.settingAway(away, at: now) }
-        let wantsPhone = !isAppActive && isDeviceUnlocked && now >= shortcutGraceUntil
-        wantsPhoneSince = wantsPhone ? (wantsPhoneSince ?? now) : nil
-        let onPhone = wantsPhoneSince.map { now.timeIntervalSince($0) >= Self.pickupDebounceSeconds } ?? false
+        if isPaused {
+            next = next.settingAway(true, at: now)
+        } else if let away = isAway() {
+            next = next.settingAway(away, at: now)
+        }
+        // In case an unlock notice was missed, ask iOS directly (it only ever says "available" when unlocked).
+        if !isDeviceUnlocked, UIApplication.shared.isProtectedDataAvailable { isDeviceUnlocked = true }
+        let onPhone = !isAppActive && isDeviceUnlocked && now >= shortcutGraceUntil
         next = next.settingPhone(onPhone, at: now).advanced(to: now)
         apply(next)
     }
@@ -280,6 +334,9 @@ final class AppModel {
         let before = session
         session = next
         if next.isComplete { return end(next) }
+        if before?.onPhone != next.onPhone || before?.away != next.away {
+            Self.log.info("on phone \(next.onPhone), away \(next.away), phone \(Int(next.phoneSeconds))s, active \(self.isAppActive), unlocked \(self.isDeviceUnlocked)")
+        }
         if before?.onPhone != next.onPhone || before?.away != next.away
             || now.timeIntervalSince(lastSaved) >= Self.saveEverySeconds {
             store.saveRunning(next)
@@ -292,7 +349,7 @@ final class AppModel {
         if before == nil || before?.isStudying != next.isStudying {
             buzzer.scheduleDone(at: next.projectedFinish(from: now), now: now, grayscale: next.config.grayscale)
         }
-        if let before, before.away != next.away, !isAppActive {
+        if let before, before.away != next.away, !isAppActive, !isPaused {
             announceAway(next.away)
         }
     }
@@ -313,7 +370,7 @@ final class AppModel {
     private func applyEscalation(before: Session?, next: Session) {
         let armed = next.isOnPhoneCounting && Escalation.isArmed(stintSeconds: next.stintSeconds)
         guard armed else {
-            escalator.stopAll()
+            escalator.stopEscalation()
             return
         }
         let wasArmed = before.map { $0.isOnPhoneCounting && Escalation.isArmed(stintSeconds: $0.stintSeconds) } ?? false
@@ -337,9 +394,12 @@ final class AppModel {
     private func end(_ last: Session) {
         ticker?.invalidate()
         ticker = nil
+        isPaused = false
         buzzer.cancelLadder()
         buzzer.clearBadge()
-        escalator.stopAll()
+        escalator.stopEverything()
+        motion.stop()
+        store.saveWalked(nil)
         liveActivity.end()
         if !last.isComplete || isAppActive { buzzer.cancelDone() }
         location.stopSession()
@@ -361,11 +421,23 @@ final class AppModel {
         AnchorRules.isUsableAnchor(accuracy: fix.horizontalAccuracy, age: -fix.timestamp.timeIntervalSinceNow)
     }
 
-    /// nil when there is no fix good enough to decide.
+    /// Steps first, sharp GPS second; nil when neither can decide.
     private func isAway() -> Bool? {
-        guard let session, let fix, fix.horizontalAccuracy >= 0,
-              fix.horizontalAccuracy <= Self.maxDecidingAccuracy else { return nil }
-        return AnchorRules.isAway(distance: Geo.distanceMeters(session.anchor, fix.point), unlockDistance: unlockDistance)
+        guard let session else { return nil }
+        let usableFix = fix.flatMap { $0.horizontalAccuracy >= 0 && $0.horizontalAccuracy <= Self.maxDecidingAccuracy ? $0 : nil }
+        guard usesSteps || usableFix != nil else { return nil }
+        return AnchorRules.isAwayCombined(
+            motion: usesSteps ? walked : nil,
+            gpsDistance: usableFix.map { Geo.distanceMeters(session.anchor, $0.point) },
+            gpsAccuracy: usableFix?.horizontalAccuracy,
+            radius: session.config.radiusMeters
+        )
+    }
+
+    private func stepped(to position: DeadReckoning) {
+        walked = position
+        store.saveWalked(position)
+        reconcile()
     }
 }
 

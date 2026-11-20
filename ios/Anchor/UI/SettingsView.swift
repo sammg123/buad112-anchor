@@ -24,7 +24,9 @@ struct SettingsView: View {
                     Button("Test black and white") { model.runShortcut(.gray) }
                     Button("Test color") { model.runShortcut(.color) }
                 }
-                Section("So the buzzing reaches you") {
+                Section("So Anchor can do its job") {
+                    LabeledContent("Location", value: locationText)
+                    LabeledContent("Motion & Fitness", value: model.motionAllowed ? "On" : "Off (GPS only)")
                     LabeledContent("Notifications", value: model.notificationsAllowed ? "On" : "Off")
                     LabeledContent("Phone passcode", value: model.hasPasscode ? "Set" : "Missing")
                     Text("Using a Focus? Anchor's buzzes are Time Sensitive. Allow Time Sensitive notifications in that Focus.")
@@ -38,6 +40,15 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+
+    private var locationText: String {
+        switch model.locationStatus {
+        case .authorizedAlways: "Always"
+        case .authorizedWhenInUse: "While Using"
+        case .denied, .restricted: "Off"
+        default: "Not set"
         }
     }
 
