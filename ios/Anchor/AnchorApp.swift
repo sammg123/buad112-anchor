@@ -18,7 +18,6 @@ struct AnchorApp: App {
                 .environment(model)
                 // Pulling down Control Center over Anchor is not "on your phone"; only leaving Anchor is.
                 .onChange(of: scenePhase, initial: true) { _, phase in model.setAppActive(phase != .background) }
-                .onOpenURL { _ in }
         }
     }
 }

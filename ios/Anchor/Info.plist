@@ -23,7 +23,6 @@
 	<key>NSBluetoothAlwaysUsageDescription</key><string>Beacon mode makes this iPhone act as a study area's beacon, so another phone running Anchor can find it.</string>
 	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
 	<dict><key>zones</key><string>Anchor needs your precise location to tell whether you're inside a no-phone zone.</string></dict>
-	<key>LSApplicationQueriesSchemes</key><array><string>shortcuts</string></array>
 	<key>CFBundleURLTypes</key>
 	<array><dict>
 		<key>CFBundleURLName</key><string>com.sammg123.anchor</string>

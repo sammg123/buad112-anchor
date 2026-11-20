@@ -253,9 +253,9 @@ private struct ZoneCard: View {
     private func hint(out: Bool) -> String {
         if out { return "The timer is paused. Walk back in to keep going." }
         if session.isDroppedAnchor {
-            guard let meters = model.metersToUnlock else { return "Waiting for GPS…" }
-            if meters < 1 { return "You look out. Checking for a few seconds…" }
-            return "About \(Int(meters.rounded(.up))) m more to walk before Stop unlocks."
+            guard let readout = model.anchorReadout else { return "Waiting for GPS…" }
+            if readout.meters >= readout.unlocksAt { return "You look out. Checking for a few seconds…" }
+            return "You're \(Int(readout.meters.rounded())) m from your anchor. Stop unlocks at about \(Int(readout.unlocksAt.rounded(.up))) m."
         }
         let zone = session.area
         if let area = zone.area(session.config.areaID) {

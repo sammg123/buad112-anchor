@@ -6,7 +6,6 @@ import UIKit
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @State private var showsGraySetup = false
 
     var body: some View {
         @Bindable var model = model
@@ -14,8 +13,8 @@ struct SettingsView: View {
             List {
                 annoyanceSection
                 wholeSessionSection
-                switchesSection(library: $model.library, grayscale: $model.grayscale, autoStart: $model.autoStart)
-                if model.grayscale { graySetupSection }
+                switchesSection(library: $model.library, autoStart: $model.autoStart)
+                grayscaleSection
                 permissionsSection
                 trySection
                 if AppModel.showsDevTools { developerSection }
@@ -55,16 +54,12 @@ struct SettingsView: View {
                     detail: "Your study clock, grace and phone time, live.")
             InfoRow(symbol: "lock.fill", tint: Palette.ink, title: "Stop is locked",
                     detail: "Until you leave the study area (its beacon) or the building (GPS).")
-            if model.grayscale {
-                InfoRow(symbol: "circle.lefthalf.filled", tint: .gray, title: "Black and white",
-                        detail: "From the moment the session starts until it ends.")
-            }
         }
     }
 
     // MARK: - Switches
 
-    private func switchesSection(library: Binding<Bool>, grayscale: Binding<Bool>, autoStart: Binding<Bool>) -> some View {
+    private func switchesSection(library: Binding<Bool>, autoStart: Binding<Bool>) -> some View {
         Section {
             Toggle(isOn: autoStart) {
                 RowLabel(symbol: "bolt.fill", tint: Palette.red, title: "Auto-start",
@@ -74,10 +69,6 @@ struct SettingsView: View {
                 RowLabel(symbol: "books.vertical.fill", tint: .brown, title: "Library mode",
                          detail: "Vibration only. No voice, siren, sound or volume floor.")
             }
-            Toggle(isOn: grayscale) {
-                RowLabel(symbol: "circle.lefthalf.filled", tint: .gray, title: "Black and white while studying",
-                         detail: "Your whole screen, for the whole session.")
-            }
         } header: {
             Text("Options")
         } footer: {
@@ -86,21 +77,16 @@ struct SettingsView: View {
         .tint(Palette.blue)
     }
 
-    private var graySetupSection: some View {
+    /// Apple lets no app switch the screen to black and white; the side button can, instantly.
+    private var grayscaleSection: some View {
         Section {
-            DisclosureGroup(isExpanded: $showsGraySetup) {
-                step(1, "Settings › Accessibility › Display & Text Size › Color Filters: pick **Grayscale**, then turn Color Filters **off**.")
-                step(2, "In Shortcuts, make a shortcut with one action, **Set Color Filters** **On**. Name it **Anchor Gray**.")
-                step(3, "Make another, **Set Color Filters** **Off**, named **Anchor Color**.")
-                step(4, "Test both below. If Shortcuts asks about Anchor, tap **Always Allow**.")
-            } label: {
-                RowLabel(symbol: "wand.and.stars", tint: .indigo, title: "One-time setup",
-                         detail: "Needed once. Then it runs by itself at start and end.")
-            }
+            step(1, "Open **Settings › Accessibility › Display & Text Size › Color Filters**, pick **Grayscale**, then turn Color Filters back **off**.")
+            step(2, "Open **Settings › Accessibility › Accessibility Shortcut** and check **Color Filters**.")
+            step(3, "Now **triple-click the side button** to go black and white when you sit down, and again to get color back.")
         } header: {
             Text("Black and white")
         } footer: {
-            Text("Apple doesn't let any app switch Color Filters itself; only Shortcuts can. So Anchor flips to Shortcuts for a split second at the start and end of a session, and comes right back.")
+            Text("iOS doesn't let apps turn on black and white, so Anchor leaves it to the side button: no app switching, and it works anywhere.")
         }
     }
 
@@ -152,14 +138,6 @@ struct SettingsView: View {
             Button { model.testBuzz() } label: {
                 RowLabel(symbol: "iphone.radiowaves.left.and.right", tint: .red, title: "Test buzz",
                          detail: "Arrives in 5 s. Lock the phone or go home to feel it.")
-            }
-            Button { model.runShortcut(.gray) } label: {
-                RowLabel(symbol: "circle.lefthalf.filled", tint: .gray, title: "Test black and white",
-                         detail: "Runs your Anchor Gray shortcut.")
-            }
-            Button { model.runShortcut(.color) } label: {
-                RowLabel(symbol: "paintpalette.fill", tint: .orange, title: "Test color",
-                         detail: "Runs your Anchor Color shortcut.")
             }
         }
         .foregroundStyle(Palette.ink)

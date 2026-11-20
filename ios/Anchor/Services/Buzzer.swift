@@ -112,12 +112,12 @@ final class Buzzer {
     }
 
     /// The "session done" notice at the projected finish, or none while the study clock is stopped.
-    func scheduleDone(at date: Date?, now: Date, grayscale: Bool) {
+    func scheduleDone(at date: Date?, now: Date) {
         center.removePendingNotificationRequests(withIdentifiers: [Self.doneID])
         guard let date else { return }
         let content = UNMutableNotificationContent()
         content.title = "Session done"
-        content.body = grayscale ? "Nice. Open Anchor to get your color back." : "Nice. Open Anchor for your grade."
+        content.body = "Nice. Open Anchor for your grade."
         content.sound = .default
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, date.timeIntervalSince(now)), repeats: false)
         add(UNNotificationRequest(identifier: Self.doneID, content: content, trigger: trigger))

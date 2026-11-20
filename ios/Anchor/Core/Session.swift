@@ -5,8 +5,6 @@ struct SessionConfig: Codable, Equatable, Sendable {
     let studyMinutes: Int
     /// A dropped anchor's lock radius (nil for a zone session).
     let radiusMeters: Double?
-    /// Run the "Anchor Gray" shortcut at the start and "Anchor Color" at the end.
-    let grayscale: Bool
     /// Library mode: vibration only, no voice, alarm or sound, and no volume floor. Optional so settings saved
     /// before it existed still load.
     let library: Bool?
@@ -16,11 +14,10 @@ struct SessionConfig: Codable, Equatable, Sendable {
     let zoneID: String?
     let areaID: String?
 
-    init(studyMinutes: Int, grayscale: Bool, library: Bool = false, grace: Double = PickupRule.defaultGraceSeconds,
+    init(studyMinutes: Int, library: Bool = false, grace: Double = PickupRule.defaultGraceSeconds,
          radiusMeters: Double? = nil, zoneID: String? = nil, areaID: String? = nil) {
         self.studyMinutes = studyMinutes
         self.radiusMeters = radiusMeters
-        self.grayscale = grayscale
         self.library = library
         self.grace = grace
         self.zoneID = zoneID

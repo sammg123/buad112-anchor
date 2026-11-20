@@ -40,6 +40,14 @@ struct LocationFilter: Equatable, Sendable {
     /// A reading too rough for the filter still proves you left when its whole circle is outside the building,
     /// up to this accuracy (so an outdoor walk with poor GPS can't keep you locked in).
     static let maxExitEvidenceAccuracyMeters = 65.0
+    /// The edge margin never goes below this, however tight the estimate gets.
+    static let minMarginMeters = 5.0
+
+    /// How far past an edge the cleaned-up position must be to count: its own uncertainty, at least 5 m.
+    /// (Steady 5-10 m GPS settles to about 3-5 m, so a 25 m circle frees you about 30 m out.)
+    static func margin(estimateAccuracy: Double) -> Double {
+        max(estimateAccuracy, minMarginMeters)
+    }
 
     let estimate: LocationEstimate?
 

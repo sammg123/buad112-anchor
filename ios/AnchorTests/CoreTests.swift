@@ -9,7 +9,7 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 private let usc = GeoPoint(lat: 34.0224, lng: -118.2851)
 
 private func config(minutes: Int = 25) -> SessionConfig {
-    SessionConfig(studyMinutes: minutes, grayscale: false)
+    SessionConfig(studyMinutes: minutes)
 }
 
 private func fresh(minutes: Int = 25) -> Session {
@@ -323,7 +323,7 @@ struct VibrationVolumeTests {
         let old = #"{"studyMinutes":45,"radiusMeters":25,"grayscale":false}"#.data(using: .utf8)!
         let config = try JSONDecoder().decode(SessionConfig.self, from: old)
         #expect(!config.isLibrary)
-        #expect(SessionConfig(studyMinutes: 45, grayscale: false, library: true).isLibrary)
+        #expect(SessionConfig(studyMinutes: 45, library: true).isLibrary)
     }
 }
 
@@ -361,7 +361,7 @@ struct GlanceGraceTests {
         #expect(PickupRule.steppedGrace(60, by: 5) == 60)
         let old = #"{"studyMinutes":45,"radiusMeters":25,"grayscale":false}"#.data(using: .utf8)!
         #expect(try JSONDecoder().decode(SessionConfig.self, from: old).graceSeconds == 10)
-        #expect(SessionConfig(studyMinutes: 45, grayscale: false, grace: 30).graceSeconds == 30)
+        #expect(SessionConfig(studyMinutes: 45, grace: 30).graceSeconds == 30)
     }
 }
 
@@ -371,7 +371,7 @@ struct GlanceGraceTests {
 struct LiveActivityStateTests {
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
     private var session: Session {
-        Session.start(config: SessionConfig(studyMinutes: 25, grayscale: false),
+        Session.start(config: SessionConfig(studyMinutes: 25),
                       zone: Zone.circle(center: GeoPoint(lat: 34, lng: -118), radius: 25), at: t0)
     }
 
@@ -697,7 +697,7 @@ struct SavedSessionTests {
 
     @Test("a session remembers its zone and study area, and counts spoofed readings")
     func zoneAndArea() throws {
-        let config = SessionConfig(studyMinutes: 25, grayscale: false, zoneID: "lib", areaID: "room-2")
+        let config = SessionConfig(studyMinutes: 25, zoneID: "lib", areaID: "room-2")
         let session = Session.start(config: config, zone: library, at: t0).countingSpoof()
         let back = try JSONDecoder().decode(Session.self, from: JSONEncoder().encode(session))
         #expect(back.config.zoneID == "lib")
@@ -778,21 +778,42 @@ struct DroppedAnchorTests {
         #expect(!AnchorRules.isUsableAnchor(accuracy: -1, age: 1))
     }
 
-    @Test("the spot is your radius plus the anchor reading's full accuracy, so a rough anchor never misplaces the edge")
+    @Test("the spot is exactly your radius around the anchor")
     func circle() {
-        let spot = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 10)
+        let spot = Zone.droppedAnchor(center: campus, radius: 25)
         #expect(spot.isDroppedAnchor)
         #expect(spot.usesWholeBuilding)
-        #expect(abs(spot.depth(of: campus) - 35) < 0.5)
-        // Every anchor that can be accepted is covered in full.
-        let roughest = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: AnchorRules.maxAnchorAccuracyMeters)
-        #expect(abs(roughest.depth(of: campus) - (25 + AnchorRules.maxAnchorAccuracyMeters)) < 0.5)
+        #expect(abs(spot.depth(of: campus) - 25) < 0.5)
+    }
+
+    @Test("the edge margin is the smoothed GPS error, at least 5 m")
+    func margin() {
+        #expect(LocationFilter.margin(estimateAccuracy: 3) == 5)
+        #expect(LocationFilter.margin(estimateAccuracy: 8) == 8)
+    }
+
+    @MainActor
+    @Test("with steady 5 m GPS, a 25 m spot frees you about 30 m out, not 46")
+    func unlockDistance() {
+        func state(atMeters meters: Double) -> BuildingPresence.State {
+            let tracker = ZoneTracker(zones: [])
+            let spot = Zone.droppedAnchor(center: campus, radius: 25)
+            tracker.setExtraZone(spot)
+            for s in 0..<15 {
+                let time = t0.addingTimeInterval(Double(s))
+                tracker.received(LocationReading(point: offset(campus, meters, 0), accuracy: 5, time: time, isSpoofed: false), at: time)
+            }
+            return tracker.building(spot.id, at: t0.addingTimeInterval(14))
+        }
+        #expect(state(atMeters: 27) != .outside)
+        #expect(state(atMeters: 32) == .outside)
+        #expect(state(atMeters: 20) == .inside)
     }
 
     @Test("a dropped-anchor session keeps its circle and radius, and the Lock Screen shows no place name")
     func session() throws {
-        let config = SessionConfig(studyMinutes: 25, grayscale: false, radiusMeters: 40)
-        let started = Session.start(config: config, zone: Zone.droppedAnchor(center: campus, radius: 40, anchorAccuracy: 5), at: t0)
+        let config = SessionConfig(studyMinutes: 25, radiusMeters: 40)
+        let started = Session.start(config: config, zone: Zone.droppedAnchor(center: campus, radius: 40), at: t0)
         let back = try JSONDecoder().decode(Session.self, from: JSONEncoder().encode(started))
         #expect(back.config.radiusMeters == 40)
         #expect(back.isDroppedAnchor)
@@ -802,7 +823,7 @@ struct DroppedAnchorTests {
 
     @Test("leaving your spot needs your whole accuracy circle outside it, like any zone")
     func leaving() {
-        let spot = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 0)
+        let spot = Zone.droppedAnchor(center: campus, radius: 25)
         #expect(ZoneGeometry.fit(center: offset(campus, 30, 0), radius: 10, in: spot.polygon) == .straddling)
         #expect(ZoneGeometry.fit(center: offset(campus, 36, 0), radius: 10, in: spot.polygon) == .fullyOutside)
     }
@@ -822,11 +843,11 @@ struct DroppedAnchorTests {
     @Test("a new spot starts fresh: the last spot's in/out doesn't carry over")
     func freshSpot() {
         let tracker = ZoneTracker(zones: [])
-        let first = Zone.droppedAnchor(center: campus, radius: 25, anchorAccuracy: 5)
+        let first = Zone.droppedAnchor(center: campus, radius: 25)
         tracker.setExtraZone(first)
         tracker.received(LocationReading(point: offset(campus, 300, 0), accuracy: 5, time: t0, isSpoofed: false), at: t0)
         #expect(tracker.buildings[first.id] != nil)
-        tracker.setExtraZone(Zone.droppedAnchor(center: offset(campus, 300, 0), radius: 25, anchorAccuracy: 5))
+        tracker.setExtraZone(Zone.droppedAnchor(center: offset(campus, 300, 0), radius: 25))
         #expect(tracker.buildings[first.id] == nil)
     }
 }

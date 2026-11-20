@@ -60,8 +60,9 @@ final class ZoneTracker {
         guard let estimate = next.estimate, next != filter else { return verdict }
         filter = next
         lastUsed = reading
+        let margin = LocationFilter.margin(estimateAccuracy: estimate.accuracy)
         buildings = Dictionary(uniqueKeysWithValues: allZones.map { zone in
-            let fit = ZoneGeometry.fit(center: estimate.point, radius: reading.accuracy, in: zone.polygon)
+            let fit = ZoneGeometry.fit(center: estimate.point, radius: margin, in: zone.polygon)
             return (zone.id, (buildings[zone.id] ?? .unknown).updated(with: fit, at: now))
         })
         return verdict
@@ -109,9 +110,9 @@ final class ZoneTracker {
         freshEstimate(at: now).map { zone.depth(of: $0.point) }
     }
 
-    /// The circle to draw around you: the cleaned-up position, as uncertain as the worse of it and the last reading.
+    /// The circle to draw around you: the cleaned-up position and the margin used at edges.
     var accuracyCircle: (center: GeoPoint, radius: Double)? {
         guard let estimate else { return nil }
-        return (estimate.point, max(estimate.accuracy, lastUsed?.accuracy ?? 0))
+        return (estimate.point, LocationFilter.margin(estimateAccuracy: estimate.accuracy))
     }
 }

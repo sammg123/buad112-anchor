@@ -63,7 +63,6 @@ final class AppModel {
         #endif
     }()
     var minutes: Int { didSet { savePreferences() } }
-    var grayscale: Bool { didSet { savePreferences() } }
     var library: Bool { didSet { savePreferences() } }
     var graceSeconds: Double { didSet { savePreferences() } }
     /// "Drop anchor here": Stop stays locked inside this circle around you.
@@ -89,7 +88,6 @@ final class AppModel {
     private let screenWatcher = ScreenWatcher()
     /// After a lock notice, iOS can still say "unlocked" for a moment; only believe it again after this long.
     private static let relockQuietSeconds = 15.0
-    private var shortcutGraceUntil = Date.distantPast
     /// A zone start (from the arrival notice) waiting until being in the zone is confirmed.
     private var pendingZoneID: String?
     /// "Drop anchor here" waiting for a usable reading.
@@ -98,8 +96,6 @@ final class AppModel {
     private var pendingAttempt: UUID?
     /// Keeps `now` (and the start screen) current with no session running.
     private var idleTicker: Timer?
-    /// The session ended in the background in black and white; color comes back when Anchor is opened.
-    private var needsColorBack = false
     private var lastSaved = Date.distantPast
     private var ticker: Timer?
     private var observers: [NSObjectProtocol] = []
@@ -111,7 +107,6 @@ final class AppModel {
     init() {
         let saved = store.loadConfig()
         minutes = saved?.studyMinutes ?? SetupInput.defaultMinutes
-        grayscale = saved?.grayscale ?? false
         library = saved?.isLibrary ?? false
         graceSeconds = saved?.graceSeconds ?? PickupRule.defaultGraceSeconds
         radiusMeters = AnchorRules.clampedRadius(saved?.radiusMeters ?? AnchorRules.defaultRadiusMeters)
@@ -185,16 +180,17 @@ final class AppModel {
 
     /// Roughly how much farther to walk before Stop unlocks: out past the edge by the GPS accuracy (the whole
     /// accuracy circle has to be outside).
-    /// How much wider than your radius the circle would be if you dropped an anchor now (the reading's accuracy).
-    var anchorMargin: Double {
-        guard let fix, fix.horizontalAccuracy >= 0 else { return 0 }
-        return min(fix.horizontalAccuracy, AnchorRules.maxAnchorAccuracyMeters)
+    /// GPS error right now (the margin used at edges), for the start screen.
+    var gpsMargin: Double? {
+        tracker.freshEstimate(at: now).map { LocationFilter.margin(estimateAccuracy: $0.accuracy) }
     }
 
-    /// Zero means you're out and Anchor is confirming it; nil means no recent position.
-    var metersToUnlock: Double? {
-        guard let session, let depth = tracker.depth(in: session.area, at: now) else { return nil }
-        return max(0, depth + (tracker.lastUsed?.accuracy ?? 0))
+    /// A dropped anchor: how far you are from it and how far out Stop unlocks (your radius plus the GPS margin).
+    var anchorReadout: (meters: Double, unlocksAt: Double)? {
+        guard let session, session.isDroppedAnchor, let here = tracker.freshEstimate(at: now) else { return nil }
+        let radius = session.config.radiusMeters ?? session.area.enclosingCircle.radius
+        return (Geo.distanceMeters(session.area.center, here.point),
+                radius + LocationFilter.margin(estimateAccuracy: here.accuracy))
     }
 
     /// Meters to the nearest way out of a building (its edge), while you're inside one; nil otherwise.
@@ -317,10 +313,11 @@ final class AppModel {
             && AnchorRules.isUsableAnchor(accuracy: fix.horizontalAccuracy, age: -fix.timestamp.timeIntervalSinceNow)
     }
 
+    /// The anchor goes where the smoothed position says you are (steadier than one reading), else the reading.
     private func beginAnchor(at fix: CLLocation) {
         let radius = AnchorRules.clampedRadius(radiusMeters)
-        begin(in: Zone.droppedAnchor(center: fix.point, radius: radius, anchorAccuracy: fix.horizontalAccuracy),
-              areaID: nil, radius: radius)
+        let center = tracker.freshEstimate(at: Date())?.point ?? fix.point
+        begin(in: Zone.droppedAnchor(center: center, radius: radius), areaID: nil, radius: radius)
     }
 
     func cancelFindingSpot() {
@@ -352,17 +349,6 @@ final class AppModel {
         store.saveFinished(nil)
     }
 
-    func runShortcut(_ shortcut: ColorShortcut) {
-        guard let url = shortcut.url else { return }
-        shortcutGraceUntil = Date().addingTimeInterval(ColorShortcut.graceSeconds)
-        UIApplication.shared.open(url) { [weak self] opened in
-            guard !opened else { return }
-            Task { @MainActor in
-                self?.notice = "Couldn't open Shortcuts. Is the Shortcuts app installed?"
-            }
-        }
-    }
-
     // MARK: - Inputs
 
     func setAppActive(_ active: Bool) {
@@ -376,12 +362,6 @@ final class AppModel {
             Task { await refreshPermissions() }
         }
         updateTracking()
-        if active {
-            if needsColorBack {
-                needsColorBack = false
-                runShortcut(.color)
-            }
-        }
         reconcile()
     }
 
@@ -555,7 +535,7 @@ final class AppModel {
         isFindingSpot = false
         finished = nil
         store.saveFinished(nil)
-        let config = SessionConfig(studyMinutes: minutes, grayscale: grayscale, library: library, grace: graceSeconds,
+        let config = SessionConfig(studyMinutes: minutes, library: library, grace: graceSeconds,
                                    radiusMeters: radius, zoneID: zone.isDroppedAnchor ? nil : zone.id, areaID: areaID)
         let started = Session.start(config: config, zone: zone, at: Date())
         if !zone.isDroppedAnchor { store.saveArrival(atZone: zone.id, at: Date()) }
@@ -567,7 +547,6 @@ final class AppModel {
         startTicker()
         apply(started)
         liveActivity.start(for: started, at: Date())
-        if config.grayscale, isAppActive { runShortcut(.gray) }
     }
 
     private func restore() {
@@ -610,7 +589,7 @@ final class AppModel {
         }
         syncLockState()
         escalator.keepPlaying()
-        let outside = !isAppActive && isDeviceUnlocked && now >= shortcutGraceUntil
+        let outside = !isAppActive && isDeviceUnlocked
         outsideAnchorSince = outside ? (outsideAnchorSince ?? now) : nil
         let onPhone = PickupRule.isOnPhone(outsideAnchorSince: outsideAnchorSince, now: now,
                                            grace: next.config.graceSeconds)
@@ -636,7 +615,7 @@ final class AppModel {
         liveActivity.update(for: next, at: now, graceEndsAt: graceEndsAt(for: next))
 
         if before == nil || before?.isStudying != next.isStudying {
-            buzzer.scheduleDone(at: next.projectedFinish(from: now), now: now, grayscale: next.config.grayscale)
+            buzzer.scheduleDone(at: next.projectedFinish(from: now), now: now)
         }
         if let before, before.away != next.away, !isAppActive, !isPaused {
             announceAway(next.away, spot: next.isDroppedAnchor)
@@ -721,12 +700,10 @@ final class AppModel {
         finished = last
         store.saveRunning(nil)
         store.saveFinished(last)
-        guard last.config.grayscale else { return }
-        if isAppActive { runShortcut(.color) } else { needsColorBack = true }
     }
 
     private func savePreferences() {
-        store.saveConfig(SessionConfig(studyMinutes: minutes, grayscale: grayscale, library: library,
+        store.saveConfig(SessionConfig(studyMinutes: minutes, library: library,
                                        grace: graceSeconds, radiusMeters: radiusMeters))
     }
 

@@ -59,7 +59,7 @@ struct StartView: View {
             ZoneLayers(zones: model.tracker.zones, accuracy: model.tracker.accuracyCircle)
             if model.startable == nil, let here = model.fix?.coordinate {
                 // The circle "Drop anchor here" would lock.
-                MapCircle(center: here, radius: AnchorRules.clampedRadius(model.radiusMeters) + model.anchorMargin)
+                MapCircle(center: here, radius: AnchorRules.clampedRadius(model.radiusMeters))
                     .foregroundStyle(Palette.blue.opacity(0.12))
                     .stroke(Palette.blue.opacity(0.6), lineWidth: 2)
             }
@@ -106,7 +106,7 @@ struct StartView: View {
             }
             MinutePicker(minutes: minutes)
             if model.startable == nil {
-                RadiusSlider(radius: radius, margin: model.anchorMargin)
+                RadiusSlider(radius: radius, margin: model.gpsMargin)
             }
             GraceStepper()
             LibraryToggle()
@@ -255,8 +255,8 @@ private struct MinutePicker: View {
 
 private struct RadiusSlider: View {
     @Binding var radius: Double
-    /// GPS accuracy right now: the circle you'd get is this much wider.
-    let margin: Double
+    /// GPS error right now, if known.
+    let margin: Double?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -272,9 +272,8 @@ private struct RadiusSlider: View {
                 .tint(Palette.blue)
                 .accessibilityLabel("Lock radius")
                 .accessibilityValue("\(Int(radius)) meters")
-            Text(margin >= 1
-                 ? "Walk out of the circle to unlock Stop. GPS adds \(Int(margin.rounded(.up))) m here."
-                 : "Walk out of the circle to unlock Stop.")
+            Text(margin.map { "Your anchor drops where you stand. Walk past the edge to unlock Stop (GPS ±\(Int($0.rounded(.up))) m here)." }
+                 ?? "Your anchor drops where you stand. Walk past the edge to unlock Stop.")
                 .font(.footnote)
                 .foregroundStyle(Palette.secondary)
                 .fixedSize(horizontal: false, vertical: true)
