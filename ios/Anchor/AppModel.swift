@@ -13,8 +13,6 @@ import os
 final class AppModel {
     enum Screen: Equatable { case permissions, start, session, done }
 
-    /// A fix worse than this never decides whether you are away.
-    static let maxDecidingAccuracy = 100.0
     /// Unlocking straight into Anchor shows Anchor in the background for a moment; a "pickup" this short that ends
     /// in Anchor is taken back.
     private static let quickReturnSeconds = 3.0
@@ -35,9 +33,13 @@ final class AppModel {
     private(set) var now = Date()
     private(set) var locationStatus: CLAuthorizationStatus = .notDetermined
     private(set) var notificationsAllowed = false
-    private(set) var motionAllowed = MotionTracker.isAuthorized
-    /// Where your steps put you relative to the anchor.
-    private(set) var walked = DeadReckoning.origin
+    private(set) var motionAllowed = ActivityMonitor.isAuthorized
+    /// No-phone zones from zones.json.
+    private(set) var zones: [Zone] = []
+    /// Cleaned-up GPS (bad readings and blunders dropped, the last 30 s averaged).
+    private(set) var filter = PresenceFilter()
+    /// Inside or outside the running session's zone, with edge slack and drift protection.
+    private(set) var presence = ZonePresence.inside
     private(set) var hasPasscode = true
     private(set) var isFindingSpot = false
     private(set) var hasOnboarded: Bool
@@ -63,9 +65,11 @@ final class AppModel {
     private let buzzer = Buzzer()
     private let escalator = Escalator()
     private let liveActivity = LiveActivityController()
-    /// Live steps and turns; the session screen's compass reads it directly so it can move every step.
-    let motion = MotionTracker()
-    private var lastWalkedSave = Date.distantPast
+    private let activity = ActivityMonitor()
+    private let zoneStore: ZoneStore = BundledZoneStore()
+    /// The last arrival notice per zone, so walking in and out of the wake circle doesn't nag.
+    private var lastArrivalNotice: [String: Date] = [:]
+    private static let arrivalNoticeCooldownSeconds = 30.0 * 60
     let volumeGuard = VolumeGuard()
     /// Launched in the background (iOS relaunching a session), Anchor is not on screen until a scene says so.
     private var isAppActive = UIApplication.shared.applicationState != .background
@@ -84,6 +88,10 @@ final class AppModel {
     private var lastSaved = Date.distantPast
     private var ticker: Timer?
     private var observers: [NSObjectProtocol] = []
+    #if DEBUG
+    /// Simulator only: start a zone session as soon as a fix lands inside one.
+    private var autoStartsZone = false
+    #endif
 
     init() {
         let saved = store.loadConfig()
@@ -97,7 +105,11 @@ final class AppModel {
         locationStatus = location.status
         location.onFix = { [weak self] fix in self?.received(fix) }
         location.onAuthorizationChange = { [weak self] status in self?.locationStatus = status }
-        motion.onUpdate = { [weak self] position in self?.stepped(to: position) }
+        loadZones()
+        location.onEnterZone = { [weak self] id in self?.arrived(atZone: id) }
+        location.watch(zones: zones)
+        activity.start()
+        observeZoneStarts()
         screenWatcher.onChange = { [weak self] blank in self?.screenChanged(blank: blank) }
         screenWatcher.start()
         observeLockState()
@@ -108,6 +120,7 @@ final class AppModel {
         let args = ProcessInfo.processInfo.arguments
         if args.contains("-onboarded") { hasOnboarded = true }
         if args.contains("-autostart"), session == nil { dropAnchor() }
+        autoStartsZone = args.contains("-autozone")
         #endif
     }
 
@@ -121,36 +134,31 @@ final class AppModel {
     }
 
     var hasLocation: Bool { locationStatus == .authorizedAlways || locationStatus == .authorizedWhenInUse }
-    /// Location and Motion & Fitness are both required: steps decide when Stop unlocks.
+    /// Location and Motion & Fitness are both required: motion tells GPS drift from walking out.
     var isReadyToStart: Bool {
-        PermissionGate.isReady(location: hasLocation, motion: motionAllowed, motionSupported: MotionTracker.isSupported)
+        PermissionGate.isReady(location: hasLocation, motion: motionAllowed, motionSupported: ActivityMonitor.isSupported)
     }
 
     var locationDenied: Bool { locationStatus == .denied || locationStatus == .restricted }
 
-    var distanceToAnchor: Double? {
-        guard let session, let fix else { return nil }
-        return Geo.distanceMeters(session.anchor, fix.point)
-    }
-
-    var unlockDistance: Double {
-        AnchorRules.unlockDistance(radius: session?.config.radiusMeters ?? radiusMeters,
-                                   anchorAccuracy: session?.anchorAccuracy ?? 0,
-                                   fixAccuracy: fix?.horizontalAccuracy ?? 0)
-    }
-
     var isStopUnlocked: Bool { session?.away ?? false }
 
-    /// Steps decide when they can; GPS is the fallback.
-    var usesSteps: Bool { motionAllowed && motion.isRunning }
-
-    /// How much farther to walk before Stop unlocks.
-    var metersToUnlock: Double? {
-        guard let session else { return nil }
-        if usesSteps { return max(1, session.config.radiusMeters - walked.distance) }
-        guard let meters = distanceToAnchor else { return nil }
-        return max(1, unlockDistance - meters)
+    /// The zone you're standing in right now (start screen), judged with the same edge slack as coming back in.
+    var currentZone: Zone? {
+        guard let here = filter.smoothed else { return nil }
+        let slack = min(here.accuracy * 0.5, ZonePresence.enterSlackMeters)
+        return zones.first { $0.depth(of: here.point) >= -slack }
     }
+
+    /// Roughly how far to walk before Stop unlocks: out past the edge by the leave margin.
+    var metersToUnlock: Double? {
+        guard let session, let here = filter.smoothed else { return nil }
+        let margin = max(ZonePresence.minLeaveMarginMeters, here.accuracy)
+        return max(1, session.area.depth(of: here.point) + margin)
+    }
+
+    /// GPS is only as sharp as iOS allows: with Precise Location off, zones can't work.
+    var isPrecise: Bool { location.isPrecise }
 
     /// The session as of this second, for display.
     var live: Session? { session?.advanced(to: now) }
@@ -162,12 +170,12 @@ final class AppModel {
     }
 
     func requestMotion() async {
-        _ = await motion.requestPermission()
-        motionAllowed = MotionTracker.isAuthorized
-        if motionAllowed, session != nil, !motion.isRunning { motion.start(from: walked, heading: 0) }
+        _ = await activity.requestPermission()
+        motionAllowed = ActivityMonitor.isAuthorized
+        if motionAllowed { activity.start() }
     }
 
-    var motionDenied: Bool { MotionTracker.isDenied }
+    var motionDenied: Bool { ActivityMonitor.isDenied }
 
     func requestNotifications() async {
         notificationsAllowed = await buzzer.requestAuthorization()
@@ -182,8 +190,10 @@ final class AppModel {
         locationStatus = location.status
         hasPasscode = LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
         notificationsAllowed = await buzzer.isAuthorized()
-        motionAllowed = MotionTracker.isAuthorized
+        motionAllowed = ActivityMonitor.isAuthorized
+        if motionAllowed { activity.start() }
         if locationStatus == .authorizedWhenInUse, !Self.skipsAlwaysPrompt { location.requestAlways() }
+        if hasLocation, !location.isPrecise { location.requestPrecise() }
     }
 
     // MARK: - Session lifecycle
@@ -196,12 +206,24 @@ final class AppModel {
         let config = SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),
                                    grayscale: grayscale, library: library, grace: graceSeconds)
         if let fix, isUsableAnchor(fix) {
-            begin(config, at: fix)
+            begin(config, in: anchorZone(at: fix, config: config))
         } else {
             pendingConfig = config
             isFindingSpot = true
             location.refresh()
         }
+    }
+
+    /// Start a session in a no-phone zone (from the start screen or the arrival notification).
+    func startZoneSession(_ zoneID: String) {
+        guard session == nil, let zone = zones.first(where: { $0.id == zoneID }) else { return }
+        guard isReadyToStart else {
+            notice = "Anchor needs Location and Motion & Fitness. Allow them in Settings › Anchor."
+            return
+        }
+        let config = SessionConfig(studyMinutes: minutes, radiusMeters: AnchorRules.clampedRadius(radiusMeters),
+                                   grayscale: grayscale, library: library, grace: graceSeconds)
+        begin(config, in: zone)
     }
 
     func cancelFindingSpot() {
@@ -261,18 +283,60 @@ final class AppModel {
 
     private func received(_ newFix: CLLocation) {
         fix = newFix
+        filter = filter.adding(LocationFix(point: newFix.point, accuracy: newFix.horizontalAccuracy,
+                                           time: newFix.timestamp))
         if let config = pendingConfig, isUsableAnchor(newFix) {
-            begin(config, at: newFix)
+            begin(config, in: anchorZone(at: newFix, config: config))
             return
         }
+        #if DEBUG
+        if autoStartsZone, session == nil, let zone = currentZone {
+            autoStartsZone = false
+            startZoneSession(zone.id)
+            return
+        }
+        #endif
         reconcile()
+    }
+
+    private func anchorZone(at fix: CLLocation, config: SessionConfig) -> Zone {
+        Zone.circle(center: fix.point, radius: config.radiusMeters)
+    }
+
+    private func loadZones() {
+        do {
+            zones = try zoneStore.zones()
+        } catch {
+            zones = []
+            notice = "Anchor couldn't read its zones file. Drop an anchor instead."
+        }
+    }
+
+    /// iOS woke Anchor at a zone's wake circle: offer a session, once in a while at most.
+    private func arrived(atZone id: String) {
+        guard session == nil, let zone = zones.first(where: { $0.id == id }) else { return }
+        let now = Date()
+        if let last = lastArrivalNotice[id], now.timeIntervalSince(last) < Self.arrivalNoticeCooldownSeconds { return }
+        lastArrivalNotice[id] = now
+        buzzer.zoneArrival(zone)
+    }
+
+    /// The arrival notification's Start button.
+    private func observeZoneStarts() {
+        observers.append(NotificationCenter.default.addObserver(forName: .anchorStartZone, object: nil, queue: .main) { [weak self] note in
+            let id = note.userInfo?["zone"] as? String
+            MainActor.assumeIsolated {
+                guard let id else { return }
+                self?.startZoneSession(id)
+            }
+        })
     }
 
     private func observeLockState() {
         // Opened by the student, the phone is unlocked. Relaunched in the background, ask iOS.
         isDeviceUnlocked = isAppActive || UIApplication.shared.isProtectedDataAvailable
         let center = NotificationCenter.default
-        observers = [
+        observers += [
             center.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, !self.isScreenBlank else { return }
@@ -310,17 +374,15 @@ final class AppModel {
 
     // MARK: - The loop
 
-    private func begin(_ config: SessionConfig, at anchorFix: CLLocation) {
+    private func begin(_ config: SessionConfig, in zone: Zone) {
         pendingConfig = nil
         isFindingSpot = false
         finished = nil
         store.saveFinished(nil)
-        let started = Session.start(config: config, anchor: anchorFix.point,
-                                    anchorAccuracy: anchorFix.horizontalAccuracy, at: Date())
-        walked = .origin
-        store.saveWalked(.origin)
+        let started = Session.start(config: config, zone: zone, at: Date())
+        // You start inside (that's where you started it); GPS has to show you leaving.
+        presence = .inside
         location.startSession()
-        motion.start(from: .origin, heading: 0)
         escalator.startKeepAlive()
         volumeGuard.setEnforcing(!config.isLibrary)
         startTicker()
@@ -340,9 +402,8 @@ final class AppModel {
         // A ladder scheduled before Anchor was ended would keep buzzing for nobody.
         buzzer.cancelLadder()
         liveActivity.adoptExisting()
-        walked = store.loadWalked() ?? .origin
+        presence = saved.away ? ZonePresence(state: .outside, pendingSince: nil) : .inside
         location.startSession()
-        motion.start(from: walked, heading: store.loadHeading() ?? 0)
         escalator.startKeepAlive()
         volumeGuard.setEnforcing(!saved.config.isLibrary)
         startTicker()
@@ -392,8 +453,7 @@ final class AppModel {
         }
         applyBuzzes(before: before, next: next)
         applyEscalation(before: before, next: next)
-        liveActivity.update(for: next, at: now, graceEndsAt: graceEndsAt(for: next),
-                            walkedMeters: usesSteps ? walked.distance : 0)
+        liveActivity.update(for: next, at: now, graceEndsAt: graceEndsAt(for: next))
 
         if before == nil || before?.isStudying != next.isStudying {
             buzzer.scheduleDone(at: next.projectedFinish(from: now), now: now, grayscale: next.config.grayscale)
@@ -467,8 +527,6 @@ final class AppModel {
         buzzer.clearBadge()
         escalator.stopEverything()
         volumeGuard.setEnforcing(false)
-        motion.stop()
-        store.saveWalked(nil)
         liveActivity.end()
         if !last.isComplete || isAppActive { buzzer.cancelDone() }
         location.stopSession()
@@ -504,28 +562,13 @@ final class AppModel {
         }
     }
 
-    /// Steps first, sharp GPS second; nil when neither can decide.
+    /// Location decides: the cleaned-up GPS against the session's zone, with edge slack, a dwell, and no leaving
+    /// while the phone sits still. Nil until there is a usable reading.
     private func isAway() -> Bool? {
-        guard let session else { return nil }
-        let usableFix = fix.flatMap { $0.horizontalAccuracy >= 0 && $0.horizontalAccuracy <= Self.maxDecidingAccuracy ? $0 : nil }
-        guard usesSteps || usableFix != nil else { return nil }
-        return AnchorRules.isAwayCombined(
-            motion: usesSteps ? walked : nil,
-            gpsDistance: usableFix.map { Geo.distanceMeters(session.anchor, $0.point) },
-            gpsAccuracy: usableFix?.horizontalAccuracy,
-            radius: session.config.radiusMeters
-        )
-    }
-
-    private func stepped(to position: DeadReckoning) {
-        walked = position
-        let crossedRadius = session.map { position.isOutside(radius: $0.config.radiusMeters) != $0.away } ?? false
-        if crossedRadius || Date().timeIntervalSince(lastWalkedSave) >= Self.saveEverySeconds {
-            store.saveWalked(position)
-            store.saveHeading(motion.heading)
-            lastWalkedSave = Date()
-        }
-        reconcile()
+        guard let session, let here = filter.smoothed else { return nil }
+        presence = presence.updated(depth: session.area.depth(of: here.point), accuracy: here.accuracy,
+                                    isStationary: activity.isStationary, at: now)
+        return presence.state == .outside
     }
 }
 

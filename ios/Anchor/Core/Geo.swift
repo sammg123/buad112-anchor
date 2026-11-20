@@ -44,25 +44,6 @@ enum AnchorRules {
         return clampedRadius(radius) + min(worse, maxAccuracyMarginMeters)
     }
 
-    /// GPS is only trusted on its own when it is this sharp; indoors it usually is not.
-    static let sharpGpsAccuracyMeters = 20.0
-
-    /// Away when your steps put you outside the circle, or when a sharp GPS fix does. Without step data, the GPS
-    /// rule with its slack decides.
-    static func isAwayCombined(motion: DeadReckoning?, gpsDistance: Double?, gpsAccuracy: Double?,
-                               radius: Double) -> Bool {
-        let r = clampedRadius(radius)
-        guard let motion else {
-            guard let gpsDistance, let gpsAccuracy, gpsAccuracy >= 0 else { return false }
-            return gpsDistance > unlockDistance(radius: r, anchorAccuracy: 0, fixAccuracy: gpsAccuracy)
-        }
-        if motion.isOutside(radius: r) { return true }
-        guard let gpsDistance, let gpsAccuracy, gpsAccuracy >= 0, gpsAccuracy <= sharpGpsAccuracyMeters else {
-            return false
-        }
-        return gpsDistance > r + gpsAccuracy
-    }
-
     static func isAway(distance: Double, unlockDistance: Double) -> Bool {
         distance > unlockDistance
     }

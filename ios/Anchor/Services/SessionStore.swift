@@ -8,7 +8,6 @@ struct SessionStore {
     private static let finishedKey = "anchor.finished.v2"
     private static let configKey = "anchor.config.v2"
     private static let onboardedKey = "anchor.onboarded.v1"
-    private static let walkedKey = "anchor.walked.v1"
 
     private let defaults: UserDefaults
 
@@ -28,10 +27,6 @@ struct SessionStore {
     func saveRunning(_ session: Session?) { save(session, key: Self.runningKey) }
     func saveFinished(_ session: Session?) { save(session, key: Self.finishedKey) }
     func saveConfig(_ config: SessionConfig) { save(config, key: Self.configKey) }
-    func loadWalked() -> DeadReckoning? { load(DeadReckoning.self, key: Self.walkedKey) }
-    func saveWalked(_ position: DeadReckoning?) { save(position, key: Self.walkedKey) }
-    func loadHeading() -> Double? { load(Double.self, key: Self.walkedKey + ".heading") }
-    func saveHeading(_ heading: Double?) { save(heading, key: Self.walkedKey + ".heading") }
 
     private func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
         guard let data = defaults.data(forKey: key) else { return nil }

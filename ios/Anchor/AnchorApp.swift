@@ -9,6 +9,7 @@ struct AnchorApp: App {
 
     init() {
         UNUserNotificationCenter.current().delegate = presenter
+        Buzzer.registerCategories()
     }
 
     var body: some Scene {

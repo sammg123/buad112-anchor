@@ -10,6 +10,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
 
     var onFix: ((CLLocation) -> Void)?
     var onAuthorizationChange: ((CLAuthorizationStatus) -> Void)?
+    /// A zone's wake circle was entered (iOS relaunches Anchor for this when Location is Always).
+    var onEnterZone: ((String) -> Void)?
 
     private let manager = CLLocationManager()
     private var backgroundSession: CLBackgroundActivitySession?
@@ -18,7 +20,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.distanceFilter = 3
+        // Every reading: the presence filter averages and cleans them up itself.
+        manager.distanceFilter = kCLDistanceFilterNone
         manager.activityType = .fitness
         manager.pausesLocationUpdatesAutomatically = false
     }
@@ -26,6 +29,14 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     var status: CLAuthorizationStatus { manager.authorizationStatus }
 
     func requestWhenInUse() { manager.requestWhenInUseAuthorization() }
+
+    /// Zones need Precise Location; with it off iOS rounds you to a few kilometers.
+    var isPrecise: Bool { manager.accuracyAuthorization == .fullAccuracy }
+
+    /// Asks iOS to turn Precise Location on (for this use) when the student switched it off.
+    func requestPrecise() {
+        manager.requestTemporaryFullAccuracyAuthorization(withPurposeKey: "zones")
+    }
 
     /// iOS shows this as a later "Change to Always Allow?" prompt; background tracking works without it.
     func requestAlways() { manager.requestAlwaysAuthorization() }
@@ -38,6 +49,23 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         manager.stopUpdatingLocation()
         manager.startUpdatingLocation()
         manager.requestLocation()
+    }
+
+    /// Asks iOS to watch a circle around each zone and wake Anchor on arrival, even when it isn't running.
+    /// iOS watches at most 20 per app; the exact outline is then checked with live GPS.
+    func watch(zones: [Zone]) {
+        guard CLLocationManager.isMonitoringAvailable(for: CLCircularRegion.self) else { return }
+        let wanted = Set(zones.prefix(20).map(\.id))
+        for region in manager.monitoredRegions where !wanted.contains(region.identifier) {
+            manager.stopMonitoring(for: region)
+        }
+        for zone in zones.prefix(20) {
+            let radius = min(zone.wakeRadiusMeters, manager.maximumRegionMonitoringDistance)
+            let region = CLCircularRegion(center: zone.center.coordinate, radius: radius, identifier: zone.id)
+            region.notifyOnEntry = true
+            region.notifyOnExit = false
+            manager.startMonitoring(for: region)
+        }
     }
 
     func startSession() {
@@ -63,6 +91,16 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let latest = locations.last else { return }
         MainActor.assumeIsolated { onFix?(latest) }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
+        let id = region.identifier
+        MainActor.assumeIsolated { onEnterZone?(id) }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?,
+                                     withError error: Error) {
+        Self.log.error("zone watch failed: \(error.localizedDescription, privacy: .public)")
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

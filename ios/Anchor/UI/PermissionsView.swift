@@ -24,10 +24,10 @@ struct PermissionsView: View {
             }
             VStack(spacing: 12) {
                 PermissionRow(symbol: "location.fill", tint: Palette.blue, title: "Location", tag: "REQUIRED",
-                              detail: "To know where your spot is and when you leave it. Choose Always when iOS asks.",
+                              detail: "To know when you're in a no-phone zone. Choose Always and keep Precise Location on.",
                               done: model.hasLocation)
                 PermissionRow(symbol: "figure.walk", tint: Palette.blue, title: "Motion & Fitness", tag: "REQUIRED",
-                              detail: "Counts your steps and turns, so Stop unlocks when you really walk out of your circle. Indoor GPS is off by 20 to 60 m.",
+                              detail: "Tells Anchor when your phone is sitting still, so indoor GPS drift can't unlock Stop.",
                               done: model.motionAllowed)
                 PermissionRow(symbol: "bell.fill", tint: Palette.red, title: "Notifications", tag: "RECOMMENDED",
                               detail: "The annoying part. Without them Anchor can't buzz you while you scroll.",

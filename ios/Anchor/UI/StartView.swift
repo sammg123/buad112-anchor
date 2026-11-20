@@ -1,7 +1,8 @@
 import MapKit
 import SwiftUI
 
-/// The start screen: how long, how big the circle, drop the anchor.
+/// The start screen: no-phone zones shaded on the map, how long, and either "Start in <zone>" when you're in
+/// one or "Drop anchor here" anywhere else.
 struct StartView: View {
     @Environment(AppModel.self) private var model
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
@@ -25,17 +26,27 @@ struct StartView: View {
         #endif
         .onChange(of: model.radiusMeters) { _, _ in recenter() }
         .onChange(of: fixKey) { _, _ in recenter() }
+        .onChange(of: model.currentZone?.id) { _, _ in recenter() }
+        .onChange(of: model.fix == nil) { _, _ in recenter() }
         .onAppear(perform: recenter)
     }
 
     private var map: some View {
         Map(position: $camera) {
-            if let here = model.fix?.coordinate {
+            ForEach(model.zones) { zone in
+                MapPolygon(coordinates: zone.polygon.map(\.coordinate))
+                    .foregroundStyle(Palette.red.opacity(0.2))
+                    .stroke(Palette.red.opacity(0.8), lineWidth: 2)
+                Annotation(zone.name, coordinate: zone.center.coordinate, anchor: .center) {
+                    ZoneLabel(name: zone.name)
+                }
+            }
+            if model.currentZone == nil, let here = model.fix?.coordinate {
                 MapCircle(center: here, radius: AnchorRules.clampedRadius(model.radiusMeters))
                     .foregroundStyle(Palette.blue.opacity(0.14))
                     .stroke(Palette.blue.opacity(0.6), lineWidth: 2)
-                Annotation("Your anchor", coordinate: here, anchor: .center) { AnchorPin() }
             }
+            UserAnnotation()
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
         .mapControlVisibility(.hidden)
@@ -64,15 +75,25 @@ struct StartView: View {
 
     private func sheet(minutes: Binding<Int>, radius: Binding<Double>) -> some View {
         VStack(spacing: 22) {
+            if let zone = model.currentZone {
+                ZoneBanner(zone: zone)
+            }
             MinutePicker(minutes: minutes)
-            RadiusSlider(radius: radius)
+            if model.currentZone == nil {
+                RadiusSlider(radius: radius)
+            }
             GraceStepper()
             LibraryToggle()
-            if !model.notificationsAllowed || !model.hasPasscode {
+            if !model.notificationsAllowed || !model.hasPasscode || !model.isPrecise {
                 warning
             }
             if model.isFindingSpot {
                 FindingSpot()
+            } else if let zone = model.currentZone {
+                Button { model.startZoneSession(zone.id) } label: {
+                    Label { Text("Start in \(zone.name)") } icon: { AnchorMark(size: 22) }
+                }
+                .buttonStyle(ProminentButtonStyle(color: Palette.red))
             } else {
                 Button(action: model.dropAnchor) {
                     Label { Text("Drop anchor here") } icon: { AnchorMark(size: 22) }
@@ -88,7 +109,9 @@ struct StartView: View {
     }
 
     private var warning: some View {
-        Text(!model.hasPasscode
+        Text(!model.isPrecise
+             ? "Precise Location is off, so Anchor can't tell where zones start. Turn it on in Settings › Anchor › Location."
+             : !model.hasPasscode
              ? "Set a phone passcode, or Anchor can't tell when your phone is locked."
              : "Notifications are off, so Anchor can't buzz you. Turn them on in Settings.")
             .font(.footnote.weight(.semibold))
@@ -102,8 +125,16 @@ struct StartView: View {
         return String(format: "%.4f,%.4f", c.latitude, c.longitude)
     }
 
-    /// Frame the circle with room around it.
+    /// Frame the zone you're in, or the circle you'd drop, with room around it.
     private func recenter() {
+        if let zone = model.currentZone {
+            let span = max(zone.wakeRadiusMeters * 2, 200)
+            withAnimation(.smooth(duration: 0.35)) {
+                camera = .region(MKCoordinateRegion(center: zone.center.coordinate,
+                                                    latitudinalMeters: span * 1.6, longitudinalMeters: span))
+            }
+            return
+        }
         guard let here = model.fix?.coordinate else { return }
         let span = AnchorRules.clampedRadius(model.radiusMeters) * 5
         withAnimation(.smooth(duration: 0.35)) {
@@ -259,5 +290,45 @@ private struct GraceStepper: View {
         }
         .frame(minWidth: 44, minHeight: 44)
         .accessibilityLabel(label)
+    }
+}
+
+/// The red "no-phone zone" tag on the map, Lime-style.
+struct ZoneLabel: View {
+    let name: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "iphone.slash").font(.system(size: 10, weight: .bold))
+            Text(name).font(.caption2.weight(.bold)).lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Palette.red, in: Capsule())
+        .accessibilityLabel("No-phone zone: \(name)")
+    }
+}
+
+/// "You're in Leavey Library": shown on the start sheet when you stand in a zone.
+private struct ZoneBanner: View {
+    let zone: Zone
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "iphone.slash")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(Palette.red, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("NO-PHONE ZONE").font(.caption.weight(.bold)).tracking(0.4).foregroundStyle(Palette.red)
+                Text("You're in \(zone.name)").font(.headline)
+                Text("Stop stays locked until you leave it.").font(.footnote).foregroundStyle(Palette.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
     }
 }

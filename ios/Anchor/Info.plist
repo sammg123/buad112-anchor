@@ -18,9 +18,11 @@
 	<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
 	<key>UIBackgroundModes</key><array><string>location</string><string>audio</string></array>
 	<key>NSSupportsLiveActivities</key><true/>
-	<key>NSLocationWhenInUseUsageDescription</key><string>Anchor drops a pin where you study. Stop stays locked until you walk out of the circle you picked.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>Anchor keeps checking how far you are from your study spot while you use other apps, so it can buzz you at the spot and leave you alone once you walk away.</string>
-	<key>NSMotionUsageDescription</key><string>Anchor needs your steps and turns to tell when you have really walked out of your circle. Indoors, GPS alone is off by 20 to 60 m.</string>
+	<key>NSLocationWhenInUseUsageDescription</key><string>Anchor uses your location to know when you are inside a no-phone zone. Stop stays locked until you leave it.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>Choose Always so Anchor can notice when you walk into a no-phone zone, and keep checking while you use other apps.</string>
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict><key>zones</key><string>Anchor needs your precise location to tell whether you're inside a no-phone zone.</string></dict>
+	<key>NSMotionUsageDescription</key><string>Anchor checks whether your phone is sitting still, so GPS drift indoors can never unlock Stop while you study.</string>
 	<key>LSApplicationQueriesSchemes</key><array><string>shortcuts</string></array>
 	<key>CFBundleURLTypes</key>
 	<array><dict>

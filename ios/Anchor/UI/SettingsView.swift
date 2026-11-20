@@ -53,7 +53,7 @@ struct SettingsView: View {
             InfoRow(symbol: "lock.iphone", tint: Palette.blue, title: "Lock Screen and Dynamic Island",
                     detail: "Your study clock, grace and phone time, live.")
             InfoRow(symbol: "lock.fill", tint: Palette.ink, title: "Stop is locked",
-                    detail: "Until your steps take you out of your circle.")
+                    detail: "Until you leave the zone. GPS decides, with slack for drift.")
             if model.grayscale {
                 InfoRow(symbol: "circle.lefthalf.filled", tint: .gray, title: "Black and white",
                         detail: "From the moment you drop the anchor until the session ends.")

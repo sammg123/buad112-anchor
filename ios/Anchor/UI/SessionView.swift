@@ -1,7 +1,7 @@
 import MapKit
 import SwiftUI
 
-/// A running session: the countdown on glass over the map, Stop locked until you leave the circle.
+/// A running session: the countdown on glass over the map, the zone shaded, Stop locked until you leave it.
 struct SessionView: View {
     @Environment(AppModel.self) private var model
     @State private var camera: MapCameraPosition = .automatic
@@ -13,15 +13,13 @@ struct SessionView: View {
                 VStack(spacing: 0) {
                     TimerCard(session: session)
                     Spacer()
-                    if model.usesSteps && !model.isPaused {
+                    if model.isPaused {
+                        AwayCard(session: session, paused: true)
+                    } else {
                         VStack(spacing: 10) {
                             notificationsWarning
-                            WalkOutCard(session: session)
+                            ZoneCard(session: session)
                         }
-                    } else if session.away {
-                        AwayCard(session: session, paused: model.isPaused)
-                    } else {
-                        lockedFooter
                     }
                 }
                 .padding(.horizontal, 12)
@@ -35,12 +33,13 @@ struct SessionView: View {
 
     private func map(_ session: Session) -> some View {
         let away = session.away
+        let tint = away ? Palette.away : Palette.red
         return Map(position: $camera) {
-            MapCircle(center: session.anchor.coordinate, radius: session.config.radiusMeters)
-                .foregroundStyle((away ? Color.gray : Palette.blue).opacity(0.14))
-                .stroke((away ? Color.gray : Palette.blue).opacity(0.6), lineWidth: 2)
-            Annotation("Your anchor", coordinate: session.anchor.coordinate, anchor: .center) {
-                AnchorPin(size: 30, color: away ? Color(white: 0.55) : Palette.blue)
+            MapPolygon(coordinates: session.area.polygon.map(\.coordinate))
+                .foregroundStyle(tint.opacity(0.18))
+                .stroke(tint.opacity(0.8), lineWidth: 2)
+            Annotation(session.area.name, coordinate: session.area.center.coordinate, anchor: .center) {
+                ZoneLabel(name: session.area.name)
             }
             UserAnnotation()
         }
@@ -61,33 +60,9 @@ struct SessionView: View {
         }
     }
 
-    private var lockedFooter: some View {
-        VStack(spacing: 10) {
-            notificationsWarning
-            if let meters = model.usesSteps ? model.walked.distance : model.distanceToAnchor {
-                Text("\(Format.meters(meters)) from your anchor\(model.usesSteps ? " by your steps" : "")")
-                    .font(.footnote.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .glassCapsule()
-            }
-            Label(lockedText, systemImage: "lock.fill")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Palette.ink.opacity(0.8))
-                .frame(maxWidth: .infinity, minHeight: 58)
-                .glassPanel(cornerRadius: 29)
-                .accessibilityLabel("Stop is locked. \(lockedText)")
-        }
-    }
-
-    private var lockedText: String {
-        guard let left = model.metersToUnlock else { return "Stop unlocks when you leave the circle" }
-        return "Walk \(Format.meters(left)) to unlock Stop"
-    }
-
     private func frame(_ session: Session) {
-        let span = max(session.config.radiusMeters, 25) * 6
-        camera = .region(MKCoordinateRegion(center: session.anchor.coordinate,
+        let span = max(session.area.wakeRadiusMeters * 2.5, 200)
+        camera = .region(MKCoordinateRegion(center: session.area.center.coordinate,
                                             latitudinalMeters: span * 1.6, longitudinalMeters: span))
     }
 }
@@ -182,5 +157,64 @@ private struct AwayCard: View {
         .padding(.bottom, 20)
         .glassPanel(cornerRadius: 38)
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// The bottom of the session screen: inside or outside the zone, roughly how far to its edge, and Stop.
+private struct ZoneCard: View {
+    @Environment(AppModel.self) private var model
+    let session: Session
+
+    var body: some View {
+        let out = session.away
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                Image(systemName: out ? "iphone" : "iphone.slash")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(out ? Palette.away : Palette.red, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .contentTransition(.symbolEffect(.replace))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(out ? "OUTSIDE THE ZONE" : "INSIDE \(session.area.name.uppercased())")
+                        .font(.caption.weight(.bold))
+                        .tracking(0.4)
+                        .foregroundStyle(out ? Palette.away : Palette.red)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Text(out ? "Your phone is free." : "No-phone zone.")
+                        .font(.title3.weight(.bold))
+                    Text(hint(out: out))
+                        .font(.subheadline)
+                        .foregroundStyle(Palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            if out {
+                Button(action: model.stop) {
+                    Label("End Session", systemImage: "stop.fill")
+                }
+                .buttonStyle(ProminentButtonStyle(color: Palette.ink))
+            } else {
+                Label("Leave the zone to unlock Stop", systemImage: "lock.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Palette.ink.opacity(0.8))
+                    .frame(maxWidth: .infinity, minHeight: 54)
+                    .background(.white.opacity(0.7), in: Capsule())
+            }
+        }
+        .foregroundStyle(Palette.ink)
+        .padding(16)
+        .glassPanel(cornerRadius: 34)
+        .animation(.smooth(duration: 0.3), value: out)
+        .sensoryFeedback(.success, trigger: out)
+    }
+
+    private func hint(out: Bool) -> String {
+        if out { return "The timer is paused. Walk back in to keep going." }
+        guard let meters = model.metersToUnlock else { return "Waiting for GPS…" }
+        return "About \(Int(meters.rounded(.up))) m to the edge and out."
     }
 }

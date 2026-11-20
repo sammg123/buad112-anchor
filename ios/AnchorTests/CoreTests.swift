@@ -316,74 +316,6 @@ struct FormatTests {
     }
 }
 
-// MARK: - Dead reckoning
-
-@Suite("Dead reckoning")
-struct DeadReckoningTests {
-    private let north = 0.0
-    private let south = Double.pi
-    private let northwest = -Double.pi / 4
-
-    @Test("24 m north then 3 m back south is 21 m from the anchor: still locked at 25 m")
-    func backtrack() {
-        let p = DeadReckoning.origin.walking(24, heading: north).walking(3, heading: south)
-        #expect(abs(p.distance - 21) < 0.001)
-        #expect(!p.isOutside(radius: 25))
-        #expect(abs(p.walkedMeters - 27) < 0.001)
-    }
-
-    @Test("10 m north then 20 m northwest is about 28 m out: unlocked at 25 m")
-    func dogleg() {
-        let p = DeadReckoning.origin.walking(10, heading: north).walking(20, heading: northwest)
-        #expect(abs(p.distance - 27.98) < 0.05)
-        #expect(p.isOutside(radius: 25))
-    }
-
-    @Test("pacing back and forth never adds up")
-    func pacing() {
-        var p = DeadReckoning.origin
-        for _ in 0..<10 { p = p.walking(8, heading: north).walking(8, heading: south) }
-        #expect(p.distance < 0.001)
-        #expect(abs(p.walkedMeters - 160) < 0.001)
-    }
-
-    @Test("negative or zero steps change nothing")
-    func ignoresNonsense() {
-        #expect(DeadReckoning.origin.walking(-5, heading: north) == DeadReckoning.origin)
-        #expect(DeadReckoning.origin.walking(0, heading: north) == DeadReckoning.origin)
-    }
-
-    @Test("turning is measured around gravity, so it works flat on a desk or upright in a pocket")
-    func yawRate() {
-        // Flat, face up: gravity points out the back (-z). Spinning left about z is a left turn.
-        #expect(Turning.yawRate(rotation: (0, 0, 1), gravity: (0, 0, -1)) == -1)
-        // Upright in a pocket: gravity points out the bottom (-y). Spinning left about y is the same left turn.
-        #expect(Turning.yawRate(rotation: (0, 1, 0), gravity: (0, -1, 0)) == -1)
-        // Tilting forward is not turning.
-        #expect(Turning.yawRate(rotation: (1, 0, 0), gravity: (0, 0, -1)) == 0)
-    }
-
-    @Test("the average heading over a stretch handles the wrap past north")
-    func circularMean() {
-        let mean = Turning.circularMean([0.1, -0.1, 2 * .pi - 0.05])
-        #expect(mean.map { abs($0) < 0.06 } == true)
-        #expect(Turning.circularMean([]) == nil)
-    }
-
-    @Test("away when steps say outside, or when GPS is sharp and says outside")
-    func awayRule() {
-        let inside = DeadReckoning.origin.walking(10, heading: north)
-        let outside = DeadReckoning.origin.walking(30, heading: north)
-        #expect(AnchorRules.isAwayCombined(motion: outside, gpsDistance: nil, gpsAccuracy: nil, radius: 25))
-        #expect(!AnchorRules.isAwayCombined(motion: inside, gpsDistance: 63, gpsAccuracy: 45, radius: 25))
-        #expect(AnchorRules.isAwayCombined(motion: inside, gpsDistance: 50, gpsAccuracy: 10, radius: 25))
-        #expect(!AnchorRules.isAwayCombined(motion: inside, gpsDistance: 30, gpsAccuracy: 10, radius: 25))
-        // No step data at all: fall back to the GPS rule with its slack.
-        #expect(AnchorRules.isAwayCombined(motion: nil, gpsDistance: 80, gpsAccuracy: 40, radius: 25))
-        #expect(!AnchorRules.isAwayCombined(motion: nil, gpsDistance: 60, gpsAccuracy: 40, radius: 25))
-    }
-}
-
 // MARK: - Vibration, volume, library mode
 
 @Suite("Vibration and volume")
@@ -481,7 +413,7 @@ struct LiveActivityStateTests {
     func grace() {
         let now = t0.addingTimeInterval(60)
         let state = LiveActivityController.state(for: session.advanced(to: now), at: now,
-                                                 graceEndsAt: now.addingTimeInterval(7), walkedMeters: 0)
+                                                 graceEndsAt: now.addingTimeInterval(7))
         #expect(state.mode == .grace)
         #expect(state.graceEndsAt == now.addingTimeInterval(7))
         #expect(state.studyEndsAt == now.addingTimeInterval(24 * 60))
@@ -492,7 +424,7 @@ struct LiveActivityStateTests {
     func onPhone() {
         let now = t0.addingTimeInterval(60)
         let s = session.settingPhone(true, at: now)
-        let state = LiveActivityController.state(for: s, at: now, graceEndsAt: nil, walkedMeters: 0)
+        let state = LiveActivityController.state(for: s, at: now, graceEndsAt: nil)
         #expect(state.mode == .onPhone)
         #expect(state.studyEndsAt == nil)
         #expect(state.graceEndsAt == nil)
@@ -500,141 +432,158 @@ struct LiveActivityStateTests {
 
     @Test("no grace while studying in Anchor")
     func studying() {
-        let state = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 0)
+        let state = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil)
         #expect(state.mode == .studying)
     }
 }
 
-// MARK: - Step detector
 
-@Suite("Step detector")
-struct StepDetectorTests {
-    /// Vertical acceleration of walking: a bounce per step at `hz` steps a second.
-    private func walk(seconds: Double, hz: Double, amplitude: Double, noise: Double = 0) -> Int {
-        var detector = StepDetector()
-        var steps = 0
-        let rate = 25.0
-        for i in 0..<Int(seconds * rate) {
-            let t = Double(i) / rate
-            let wobble = noise * sin(Double(i) * 12.9898)
-            let (next, stepped) = detector.adding(verticalAcceleration: amplitude * sin(2 * .pi * hz * t) + wobble, at: t)
-            detector = next
-            if stepped { steps += 1 }
-        }
-        return steps
+// MARK: - Zones
+
+/// A point `east`/`north` meters from `origin`, the same flat projection the zones use.
+private func offset(_ origin: GeoPoint, _ east: Double, _ north: Double) -> GeoPoint {
+    ZoneGeometry.point(from: origin, east: east, north: north)
+}
+
+@Suite("Zones")
+struct ZoneTests {
+    private let origin = GeoPoint(lat: 34.0218, lng: -118.2830)
+    private var square: [GeoPoint] { [(-50, -50), (50, -50), (50, 50), (-50, 50)].map { offset(origin, $0.0, $0.1) } }
+    /// An L: the top-right corner is cut out.
+    private var ell: [GeoPoint] { [(0, 0), (100, 0), (100, 40), (40, 40), (40, 100), (0, 100)].map { offset(origin, $0.0, $0.1) } }
+
+    @Test("a point is inside a square zone, or not")
+    func insideSquare() {
+        #expect(ZoneGeometry.contains(offset(origin, 0, 0), in: square))
+        #expect(ZoneGeometry.contains(offset(origin, 49, 49), in: square))
+        #expect(!ZoneGeometry.contains(offset(origin, 60, 0), in: square))
+        #expect(!ZoneGeometry.contains(offset(origin, 0, -51), in: square))
     }
 
-    @Test("counts each step of a normal walk")
-    func walking() {
-        #expect((18...22).contains(walk(seconds: 10, hz: 2, amplitude: 0.25)))
+    @Test("concave outlines work: the notch of an L is outside")
+    func concave() {
+        #expect(ZoneGeometry.contains(offset(origin, 20, 80), in: ell))
+        #expect(ZoneGeometry.contains(offset(origin, 70, 20), in: ell))
+        #expect(!ZoneGeometry.contains(offset(origin, 70, 70), in: ell))
     }
 
-    @Test("a brisk walk is still one count per step")
-    func brisk() {
-        #expect((26...30).contains(walk(seconds: 10, hz: 2.8, amplitude: 0.35)))
+    @Test("depth is meters to the nearest edge: positive inside, negative outside")
+    func depth() {
+        #expect(abs(ZoneGeometry.depth(of: offset(origin, 0, 0), in: square) - 50) < 0.5)
+        #expect(abs(ZoneGeometry.depth(of: offset(origin, 45, 0), in: square) - 5) < 0.5)
+        #expect(abs(ZoneGeometry.depth(of: offset(origin, 60, 0), in: square) + 10) < 0.5)
+        #expect(abs(ZoneGeometry.depth(of: offset(origin, 70, 70), in: ell) + 30) < 0.5)
     }
 
-    @Test("handling the phone at a desk is not walking")
-    func fidgeting() {
-        #expect(walk(seconds: 10, hz: 2, amplitude: 0.04, noise: 0.03) == 0)
+    @Test("a dropped anchor is a circle zone of the chosen radius")
+    func circle() {
+        let zone = Zone.circle(center: origin, radius: 25)
+        #expect(abs(zone.depth(of: origin) - 25) < 0.5)
+        #expect(abs(zone.depth(of: offset(origin, 30, 0)) + 5) < 0.5)
     }
 
-    @Test("stride comes from the pedometer once it has counted enough steps")
-    func stride() {
-        #expect(StepDetector.stride(pedometerMeters: 0, pedometerSteps: 0) == StepDetector.defaultStrideMeters)
-        #expect(StepDetector.stride(pedometerMeters: 16, pedometerSteps: 20) == 0.8)
-        #expect(StepDetector.stride(pedometerMeters: 100, pedometerSteps: 20) == StepDetector.maxStrideMeters)
+    @Test("the wake circle iOS watches covers the whole zone, and is at least 100 m")
+    func wakeCircle() {
+        let zone = Zone(id: "sq", name: "Square", polygon: square)
+        #expect(zone.wakeRadiusMeters >= 100)
+        #expect(square.allSatisfy { Geo.distanceMeters(zone.center, $0) < zone.wakeRadiusMeters })
+    }
+
+    @Test("Leavey Library ships in zones.json, and its outline holds the building")
+    func leavey() throws {
+        let url = try #require(Bundle.main.url(forResource: "zones", withExtension: "json"))
+        let zones = try ZoneCatalog.decode(Data(contentsOf: url))
+        let leavey = try #require(zones.first { $0.id == "usc-leavey-library" })
+        #expect(leavey.polygon.count >= 10)
+        #expect(leavey.contains(GeoPoint(lat: 34.02175, lng: -118.28290)))
+        #expect(!leavey.contains(GeoPoint(lat: 34.02300, lng: -118.28290)))
+    }
+
+    @Test("zones.json with no zones or a broken outline is refused")
+    func badCatalog() {
+        #expect(throws: ZoneCatalog.Problem.self) { try ZoneCatalog.decode(Data(#"{"version":1,"zones":[{"id":"x","name":"X","polygon":[[34,-118],[34.1,-118]]}]}"#.utf8)) }
     }
 }
 
-// MARK: - Walking out on the Live Activity
+// MARK: - Presence
 
-@Suite("Live Activity walking out")
-struct LiveActivityWalkingTests {
+@Suite("Presence")
+struct PresenceTests {
+    private let origin = GeoPoint(lat: 34.0218, lng: -118.2830)
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-    private var session: Session {
-        Session.start(config: SessionConfig(studyMinutes: 25, radiusMeters: 25, grayscale: false),
-                      anchor: GeoPoint(lat: 34, lng: -118), anchorAccuracy: 10, at: t0)
+    private func fix(_ east: Double, _ north: Double, acc: Double, at seconds: Double) -> LocationFix {
+        LocationFix(point: offset(origin, east, north), accuracy: acc, time: t0.addingTimeInterval(seconds))
+    }
+    private func east(of p: GeoPoint) -> Double { (p.lng - origin.lng) * .pi / 180 * Geo.earthRadiusMeters * cos(origin.lat * .pi / 180) }
+
+    @Test("fixes worse than 65 m are thrown away")
+    func dropsBad() {
+        #expect(PresenceFilter().adding(fix(0, 0, acc: 80, at: 0)).smoothed == nil)
+        #expect(PresenceFilter().adding(fix(0, 0, acc: -1, at: 0)).smoothed == nil)
     }
 
-    @Test("walking a few meters from the anchor shows the walk-out state with the distance")
-    func walkingOut() {
-        let state = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 18.4)
-        #expect(state.mode == .walkingOut)
-        #expect(state.walkedMeters == 18.4)
-        #expect(LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 1).mode == .studying)
+    @Test("recent fixes are averaged, the sharper ones counting more")
+    func averages() throws {
+        let even = PresenceFilter().adding(fix(0, 0, acc: 10, at: 0)).adding(fix(10, 0, acc: 10, at: 1))
+        #expect(abs(east(of: try #require(even.smoothed).point) - 5) < 0.2)
+        let weighted = PresenceFilter().adding(fix(0, 0, acc: 5, at: 0)).adding(fix(20, 0, acc: 20, at: 1))
+        #expect(abs(east(of: try #require(weighted.smoothed).point) - 1.18) < 0.2)
     }
 
-    @Test("the card updates on a mode change or every 5 m, not every step")
-    func updateRate() {
-        let a = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 6)
-        let b = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 9)
-        let c = LiveActivityController.state(for: session, at: t0, graceEndsAt: nil, walkedMeters: 11)
-        #expect(!LiveActivityController.needsUpdate(from: a, to: b))
-        #expect(LiveActivityController.needsUpdate(from: b, to: c))
-        #expect(LiveActivityController.needsUpdate(from: nil, to: a))
-    }
-}
-
-// MARK: - Walk-out status
-
-@Suite("Walk-out status")
-struct WalkOutStatusTests {
-    @Test("at the anchor, walking out, walking back in, and out of the circle")
-    func states() {
-        #expect(WalkOut.status(distance: 0.2, earlier: 0, radius: 25) == .atAnchor)
-        #expect(WalkOut.status(distance: 9, earlier: 7, radius: 25) == .walkingOut)
-        #expect(WalkOut.status(distance: 7, earlier: 9, radius: 25) == .walkingBack)
-        #expect(WalkOut.status(distance: 9, earlier: 9, radius: 25) == .walkingOut)
-        #expect(WalkOut.status(distance: 25.2, earlier: 24, radius: 25) == .out)
+    @Test("fixes older than 30 s fall out of the average")
+    func window() throws {
+        let f = PresenceFilter().adding(fix(0, 0, acc: 10, at: 0)).adding(fix(20, 0, acc: 10, at: 31))
+        #expect(abs(east(of: try #require(f.smoothed).point) - 20) < 0.2)
     }
 
-    @Test("meters to go round up so it never says 0 before Stop unlocks")
-    func metersToGo() {
-        #expect(WalkOut.metersToGo(distance: 24.6, radius: 25) == 1)
-        #expect(WalkOut.metersToGo(distance: 18, radius: 25) == 7)
-        #expect(WalkOut.metersToGo(distance: 30, radius: 25) == 0)
+    @Test("a sudden jump no one could walk is rejected as a GPS blunder")
+    func blunder() throws {
+        let f = PresenceFilter()
+            .adding(fix(0, 0, acc: 10, at: 0)).adding(fix(0, 0, acc: 10, at: 1)).adding(fix(0, 0, acc: 10, at: 2))
+            .adding(fix(200, 0, acc: 15, at: 3))
+        #expect(abs(east(of: try #require(f.smoothed).point)) < 0.5)
     }
 
-    @Test("the arrow points straight away from the anchor")
-    func arrow() {
-        #expect(abs(WalkOut.outwardAngle(DeadReckoning(east: 0, north: 5, walkedMeters: 5))) < 1e-9)
-        #expect(abs(WalkOut.outwardAngle(DeadReckoning(east: 5, north: 0, walkedMeters: 5)) - .pi / 2) < 1e-9)
-    }
-}
-
-// MARK: - Review fixes (compass build)
-
-@Suite("Compass review fixes")
-struct CompassReviewTests {
-    @Test("live steps can only run a few meters ahead of the pedometer, so shaking the phone can't unlock Stop")
-    func shakeCapped() {
-        #expect(StepDetector.allowsLiveStep(liveMeters: 0, stride: 0.7, pedometerMeters: 0))
-        #expect(StepDetector.allowsLiveStep(liveMeters: 3.2, stride: 0.7, pedometerMeters: 0))
-        #expect(!StepDetector.allowsLiveStep(liveMeters: 3.5, stride: 0.7, pedometerMeters: 0))
-        #expect(StepDetector.allowsLiveStep(liveMeters: 20, stride: 0.7, pedometerMeters: 18))
+    @Test("leaving needs to be clearly outside, past the GPS accuracy, for 15 s")
+    func leaves() {
+        let a = ZonePresence.inside.updated(depth: -20, accuracy: 10, isStationary: false, at: t0)
+        #expect(a.state == .inside)
+        #expect(a.updated(depth: -20, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(16)).state == .outside)
     }
 
-    @Test("pedometer catch-up is capped per report")
-    func catchUpCapped() {
-        #expect(StepDetector.catchUp(pedometerMeters: 10, liveMeters: 9) == 0)
-        #expect(StepDetector.catchUp(pedometerMeters: 14, liveMeters: 10) == 4)
-        #expect(StepDetector.catchUp(pedometerMeters: 60, liveMeters: 10) == StepDetector.maxCatchUpMeters)
+    @Test("near the edge, inside the GPS slack, you stay in")
+    func edgeSlack() {
+        var p = ZonePresence.inside
+        for s in stride(from: 0.0, through: 60, by: 1) {
+            p = p.updated(depth: -10, accuracy: 25, isStationary: false, at: t0.addingTimeInterval(s))
+        }
+        #expect(p.state == .inside)
     }
 
-    @Test("the arrow angle is kept near the last one, so crossing behind the anchor never spins it")
-    func arrowUnwrapped() {
-        let justWest = DeadReckoning(east: -0.01, north: -5, walkedMeters: 5)
-        let angle = WalkOut.outwardAngle(justWest, near: .pi)
-        #expect(abs(angle - .pi) < 0.01)
-        #expect(abs(WalkOut.outwardAngle(DeadReckoning(east: 5, north: 0, walkedMeters: 5), near: 2 * .pi + 1) - (2 * .pi + .pi / 2)) < 1e-9)
+    @Test("sitting still, GPS drift can never take you out")
+    func stationaryDrift() {
+        var p = ZonePresence.inside
+        for s in stride(from: 0.0, through: 120, by: 1) {
+            p = p.updated(depth: -30, accuracy: 20, isStationary: true, at: t0.addingTimeInterval(s))
+        }
+        #expect(p.state == .inside)
     }
 
-    @Test("the walking-out card has hysteresis: in at 3 m, back out under 2 m")
-    func hysteresis() {
-        #expect(LiveActivityController.isWalkingOut(meters: 3, wasWalkingOut: false))
-        #expect(!LiveActivityController.isWalkingOut(meters: 2.5, wasWalkingOut: false))
-        #expect(LiveActivityController.isWalkingOut(meters: 2.5, wasWalkingOut: true))
-        #expect(!LiveActivityController.isWalkingOut(meters: 1.9, wasWalkingOut: true))
+    @Test("a brief dip outside starts the 15 s over")
+    func briefDip() {
+        let p = ZonePresence.inside
+            .updated(depth: -20, accuracy: 10, isStationary: false, at: t0)
+            .updated(depth: 3, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(5))
+            .updated(depth: -20, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(10))
+            .updated(depth: -20, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(20))
+        #expect(p.state == .inside)
+    }
+
+    @Test("walking back in counts after 5 s inside")
+    func returns() {
+        let out = ZonePresence(state: .outside, pendingSince: nil)
+        let a = out.updated(depth: 5, accuracy: 10, isStationary: false, at: t0)
+        #expect(a.state == .outside)
+        #expect(a.updated(depth: 5, accuracy: 10, isStationary: false, at: t0.addingTimeInterval(6)).state == .inside)
     }
 }

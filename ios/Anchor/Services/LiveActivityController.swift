@@ -13,27 +13,15 @@ final class LiveActivityController {
     /// Updates run one after another, so a quick pair of changes can never land in the wrong order.
     private var lastUpdate: Task<Void, Never>?
 
-    /// Steps this far from the anchor (still inside the circle) show the walk-out state, and it stays until you
-    /// are back under `walkingOutUntilMeters`, so pacing near the line doesn't flip the card back and forth.
-    nonisolated static let walkingOutAfterMeters = 3.0
-    nonisolated static let walkingOutUntilMeters = 2.0
-
-    nonisolated static func isWalkingOut(meters: Double, wasWalkingOut: Bool) -> Bool {
-        meters >= (wasWalkingOut ? walkingOutUntilMeters : walkingOutAfterMeters)
-    }
-    /// While walking out the card refreshes every this many meters; iOS limits how often it may update.
-    nonisolated static let walkingUpdateMeters = 5.0
-
     /// `graceEndsAt` is set while you are unlocked and out of Anchor but the grace period has not run out.
-    nonisolated static func state(for session: Session, at now: Date, graceEndsAt: Date?,
-                                  walkedMeters: Double, wasWalkingOut: Bool = false) -> AnchorActivityAttributes.ContentState {
+    nonisolated static func state(for session: Session, at now: Date,
+                                  graceEndsAt: Date?) -> AnchorActivityAttributes.ContentState {
         let mode: AnchorActivityAttributes.ContentState.Mode =
             session.away ? .away
             : session.isOnPhoneCounting ? .onPhone
             : graceEndsAt != nil ? .grace
-            : isWalkingOut(meters: walkedMeters, wasWalkingOut: wasWalkingOut) ? .walkingOut
             : .studying
-        let studyRuns = mode == .studying || mode == .grace || mode == .walkingOut
+        let studyRuns = mode == .studying || mode == .grace
         return AnchorActivityAttributes.ContentState(
             mode: mode,
             studyRemaining: session.remainingSeconds,
@@ -41,20 +29,14 @@ final class LiveActivityController {
             phoneSeconds: session.phoneSeconds,
             phoneZeroAt: mode == .onPhone ? now.addingTimeInterval(-session.phoneSeconds) : nil,
             totalSeconds: session.targetSeconds,
-            graceEndsAt: mode == .grace ? graceEndsAt : nil,
-            walkedMeters: mode == .walkingOut ? walkedMeters : nil,
-            radiusMeters: session.config.radiusMeters
+            graceEndsAt: mode == .grace ? graceEndsAt : nil
         )
     }
 
-    /// A new card on a mode change, or every few meters while walking out; never on every step.
+    /// A new card only when the mode changes; the card's own timers do the counting.
     nonisolated static func needsUpdate(from old: AnchorActivityAttributes.ContentState?,
                                         to new: AnchorActivityAttributes.ContentState) -> Bool {
-        guard let old else { return true }
-        if old.mode != new.mode { return true }
-        guard new.mode == .walkingOut else { return false }
-        let bucket = { (m: Double?) in Int(((m ?? 0) / walkingUpdateMeters).rounded(.down)) }
-        return bucket(old.walkedMeters) != bucket(new.walkedMeters)
+        old?.mode != new.mode
     }
 
     /// Past the study end the card is out of date unless Anchor updated it.
@@ -65,7 +47,7 @@ final class LiveActivityController {
     /// Starting needs Anchor on screen; iOS refuses from the background.
     func start(for session: Session, at now: Date) {
         guard activity == nil, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        let state = Self.state(for: session, at: now, graceEndsAt: nil, walkedMeters: 0)
+        let state = Self.state(for: session, at: now, graceEndsAt: nil)
         do {
             activity = try Activity.request(
                 attributes: AnchorActivityAttributes(minutes: session.config.studyMinutes),
@@ -82,10 +64,9 @@ final class LiveActivityController {
         activity = Activity<AnchorActivityAttributes>.activities.first
     }
 
-    func update(for session: Session, at now: Date, graceEndsAt: Date?, walkedMeters: Double) {
+    func update(for session: Session, at now: Date, graceEndsAt: Date?) {
         guard let activity else { return }
-        let state = Self.state(for: session, at: now, graceEndsAt: graceEndsAt, walkedMeters: walkedMeters,
-                               wasWalkingOut: lastState?.mode == .walkingOut)
+        let state = Self.state(for: session, at: now, graceEndsAt: graceEndsAt)
         guard Self.needsUpdate(from: lastState, to: state) else { return }
         lastState = state
         let id = activity.id

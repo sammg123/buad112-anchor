@@ -34,6 +34,9 @@ struct SessionConfig: Codable, Equatable, Sendable {
 /// - away: past the Stop unlock distance; the phone is free there and nothing else counts.
 struct Session: Codable, Equatable, Sendable {
     let config: SessionConfig
+    /// The no-phone zone this session is locked to. Nil only for sessions saved before zones existed; those use a
+    /// circle of the chosen radius around the anchor.
+    let zone: Zone?
     let anchor: GeoPoint
     let anchorAccuracy: Double
     let startedAt: Date
@@ -50,10 +53,22 @@ struct Session: Codable, Equatable, Sendable {
     let finishedAt: Date?
 
     static func start(config: SessionConfig, anchor: GeoPoint, anchorAccuracy: Double, at now: Date) -> Session {
-        Session(config: config, anchor: anchor, anchorAccuracy: anchorAccuracy, startedAt: now, lastTick: now,
+        start(config: config, zone: nil, anchor: anchor, anchorAccuracy: anchorAccuracy, at: now)
+    }
+
+    static func start(config: SessionConfig, zone: Zone, at now: Date) -> Session {
+        start(config: config, zone: zone, anchor: zone.center, anchorAccuracy: 0, at: now)
+    }
+
+    private static func start(config: SessionConfig, zone: Zone?, anchor: GeoPoint, anchorAccuracy: Double,
+                              at now: Date) -> Session {
+        Session(config: config, zone: zone, anchor: anchor, anchorAccuracy: anchorAccuracy, startedAt: now, lastTick: now,
                 studiedSeconds: 0, phoneSeconds: 0, stintSeconds: 0, longestStintSeconds: 0, awaySeconds: 0, onPhone: false, away: false, pickups: 0,
                 finishedAt: nil)
     }
+
+    /// Where Stop is locked: the zone, or a circle around the anchor.
+    var area: Zone { zone ?? Zone.circle(center: anchor, radius: config.radiusMeters) }
 
     var targetSeconds: Double { Double(config.studyMinutes) * 60 }
     var remainingSeconds: Double { max(0, targetSeconds - studiedSeconds) }
@@ -137,7 +152,7 @@ struct Session: Codable, Equatable, Sendable {
         finishedAt: Date?? = nil
     ) -> Session {
         Session(
-            config: config, anchor: anchor, anchorAccuracy: anchorAccuracy, startedAt: startedAt,
+            config: config, zone: zone, anchor: anchor, anchorAccuracy: anchorAccuracy, startedAt: startedAt,
             lastTick: lastTick ?? self.lastTick,
             studiedSeconds: studiedSeconds ?? self.studiedSeconds,
             phoneSeconds: phoneSeconds ?? self.phoneSeconds,

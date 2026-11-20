@@ -65,6 +65,28 @@ final class Buzzer {
         add(UNNotificationRequest(identifier: "anchor-pickup", content: content, trigger: nil))
     }
 
+    nonisolated static let zoneCategory = "anchor-zone-arrival"
+    nonisolated static let startAction = "anchor-start"
+
+    /// The Start button on the arrival notice opens Anchor and starts the session.
+    static func registerCategories() {
+        let start = UNNotificationAction(identifier: startAction, title: "Start", options: [.foreground])
+        let category = UNNotificationCategory(identifier: zoneCategory, actions: [start], intentIdentifiers: [])
+        UNUserNotificationCenter.current().setNotificationCategories([category])
+    }
+
+    /// "You're at Leavey Library. Start?"
+    func zoneArrival(_ zone: Zone) {
+        let content = UNMutableNotificationContent()
+        content.title = "You're at \(zone.name)"
+        content.body = "It's a no-phone zone. Tap Start to anchor your study session."
+        content.sound = .default
+        content.interruptionLevel = .timeSensitive
+        content.categoryIdentifier = Self.zoneCategory
+        content.userInfo = ["zone": zone.id]
+        add(UNNotificationRequest(identifier: "anchor-arrival-\(zone.id)", content: content, trigger: nil))
+    }
+
     func testBuzz(silent: Bool) {
         let content = UNMutableNotificationContent()
         content.title = "Test buzz"
@@ -123,12 +145,28 @@ final class Buzzer {
     }
 }
 
-/// Shows Anchor's own notices as banners while Anchor is open (iOS hides them by default).
+extension Notification.Name {
+    /// Posted with `userInfo["zone"]` when the arrival notice's Start (or the notice itself) is tapped.
+    static let anchorStartZone = Notification.Name("anchorStartZone")
+}
+
+/// Shows Anchor's own notices as banners while Anchor is open (iOS hides them by default), and turns a tap on the
+/// arrival notice into starting that zone's session.
 final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
         [.banner, .sound]
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        let content = response.notification.request.content
+        guard content.categoryIdentifier == Buzzer.zoneCategory,
+              response.actionIdentifier == Buzzer.startAction || response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+              let zone = content.userInfo["zone"] as? String else { return }
+        await MainActor.run {
+            NotificationCenter.default.post(name: .anchorStartZone, object: nil, userInfo: ["zone": zone])
+        }
     }
 }
